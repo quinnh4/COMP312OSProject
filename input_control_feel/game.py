@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from input_control_feel.wave_manager import WaveManager
 
 import pygame
 
@@ -151,6 +152,14 @@ class Game:
         self.reload_cooldown_left = 0.0
         self.is_reloading = False
 
+        self.wave_manager = WaveManager(self.playfield)
+        self.wave_manager.start_wave()
+
+    @property
+    def _hit_rect(self) -> pygame.Rect:
+        r = self.player_rect.inflate(-self.PLAYER_SIZE // 2, -self.PLAYER_SIZE // 2)
+        return r
+
     @property
     def preset(self) -> FeelPreset:
         return self.presets[self.preset_idx]
@@ -180,6 +189,9 @@ class Game:
         self.fire_cooldown_left = 0.0
         self.reload_cooldown_left = 0.0
         self.is_reloading = False
+
+        self.wave_manager = WaveManager(self.playfield)
+        self.wave_manager.start_wave()
 
         if not keep_state:
             self.state = "play"
@@ -535,6 +547,29 @@ class Game:
             if not self.playfield.collidepoint(projectile.position.x, projectile.position.y):
                 self.projectiles.remove(projectile)
 
+        self.projectiles = self.wave_manager.check_projectile_hits(
+            self.projectiles,
+            damage=1,
+            impulse=200.0,
+        )
+        self.wave_manager.update(dt, self.player_pos)
+ 
+        if self.wave_manager.wave_complete:
+            self.wave_manager.transition_timer -= dt
+            if self.wave_manager.transition_timer <= 0:
+                still_going = self.wave_manager.advance_wave()
+                if not still_going:
+                    self.state = "victory"
+ 
+        if self.wave_manager.all_waves_done:
+            self.state = "victory"
+
+        hit_rect = self.player_rect.inflate(-self.PLAYER_SIZE // 2, -self.PLAYER_SIZE // 2)
+        for enemy in self.wave_manager.enemies:
+            if enemy.alive and enemy.rect.colliderect(hit_rect):
+                print("Player hit!")  # placeholder until you add HP later
+                break
+
     def _draw_hud(self) -> None:
         pygame.draw.rect(self.screen, (46, 52, 64), pygame.Rect(0, 0, self.SCREEN_W, self.HUD_H))
 
@@ -542,6 +577,7 @@ class Game:
         left = (
             f"Bounds: {self.boundary_mode.value.upper()}   Control: {control}   "
             f"Scheme: {self.control_scheme.value}   Feel: {self.preset.name}"
+            f"Wave: {self.wave_manager.wave_number}/{self.wave_manager.total_waves}"
         )
 
         dash = "READY" if self.dash_cooldown_left <= 0 else f"CD {self.dash_cooldown_left:0.2f}s"
@@ -603,6 +639,8 @@ class Game:
         pygame.draw.rect(self.screen, (10, 12, 16), self.playfield)
         pygame.draw.rect(self.screen, (76, 86, 106), self.playfield, width=2)
 
+        self.wave_manager.draw(self.screen, self.font)
+
         # projectiles
         for projectile in self.projectiles:
             projectile.draw(self.screen)
@@ -621,3 +659,12 @@ class Game:
                 "Projectile Shooter",
                 "ENTER: start   ESC: QUIT  SPACE: shoot   R: reload   1/2/3: feel   SHIFT: dash   C: scheme   P: mode   F1: debug",
             )
+        
+        if self.wave_manager.wave_complete and not self.wave_manager.all_waves_done:
+            self._draw_center_message(
+                f"Wave {self.wave_manager.wave_number} Clear!",
+                f"Next wave in {self.wave_manager.transition_timer:.1f}s...",
+            )
+ 
+        if self.state == "victory":
+            self._draw_center_message("YOU WIN!", f"Kills: {self.wave_manager.total_kills}   ENTER to restart")
