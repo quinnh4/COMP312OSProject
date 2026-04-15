@@ -67,6 +67,15 @@ class Game:
     DASH_IMPULSE = 760.0
     DASH_COOLDOWN = 0.65
 
+    @staticmethod
+    def _approach_zero(value: float, decel: float, dt: float) -> float:
+        step = decel * dt
+        if value > 0:
+            return max(0.0, value - step)
+        if value < 0:
+            return min(0.0, value + step)
+        return 0.0
+
     def __init__(self) -> None:
         self.screen = pygame.display.set_mode((self.SCREEN_W, self.SCREEN_H))
         self.font = pygame.font.SysFont(None, 22)
@@ -499,7 +508,11 @@ class Game:
             # Horizontal accel; no vertical input (gravity handles Y).
             self.player_vel.x += x * p.accel * dt
             if x == 0:
-                self.player_vel.x -= self.player_vel.x * min(1.0, p.friction * dt)
+                self.player_vel.x = self._approach_zero(
+                self.player_vel.x,
+                p.friction * p.max_speed,
+                dt,
+                )
             self.player_vel.x = max(-p.max_speed, min(p.max_speed, self.player_vel.x))
 
             # Jump is a discrete action.
@@ -530,7 +543,9 @@ class Game:
 
             # Friction: nudge velocity toward zero when no input.
             if direction.length_squared() == 0:
-                self.player_vel -= self.player_vel * min(1.0, p.friction * dt)
+                decel = p.friction * p.max_speed
+                self.player_vel.x = self._approach_zero(self.player_vel.x, decel, dt)
+                self.player_vel.y = self._approach_zero(self.player_vel.y, decel, dt)
 
             if self.player_vel.length() > p.max_speed:
                 self.player_vel.scale_to_length(p.max_speed)
