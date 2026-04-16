@@ -628,7 +628,7 @@ class Game:
                     else:
                         wave_num = self.wave_manager.wave_number
                         # base damage scaled up by 50% per wave after the first
-                        wave_scaling = 1.0 + 0.50 * (wave_num - 1)
+                        wave_scaling = 1.5 * (wave_num - 1)
                         damage = enemy.contact_damage * wave_scaling
                     self.player_hp -= damage
                     self.damage_cooldown_left = self.DAMAGE_COOLDOWN
@@ -648,7 +648,7 @@ class Game:
 
         # background
         pygame.draw.rect(self.screen, (40, 10, 10), (bar_x, bar_y, bar_w, bar_h), border_radius=3)
-        # fill — shifts from green to red as HP drops
+        # shifts from green to red as HP drops
         fill_w = int(bar_w * hp_ratio)
         if hp_ratio > 0.6:
             bar_color = (80, 200, 80)
@@ -674,7 +674,7 @@ class Game:
         control = "PLATFORMER" if self.platformer_mode else "TOPDOWN"
         left = (
             f"Bounds: {self.boundary_mode.value.upper()}   Control: {control}   "
-            f"Scheme: {self.control_scheme.value}   Feel: {self.preset.name}   "
+            f"Scheme: {self.control_scheme.value}   Weapon: {self.preset.name}   "
             f"Wave: {self.wave_manager.wave_number}/{self.wave_manager.total_waves}"
         )
 
@@ -743,7 +743,7 @@ class Game:
         for projectile in self.projectiles:
             projectile.draw(self.screen)
 
-        # Player — flash red when recently damaged
+        # Player flashes red when recently damaged
         if self.damage_cooldown_left > 0 and int(self.damage_cooldown_left * 10) % 2 == 0:
             player_color = (255, 80, 80)
         else:
@@ -759,7 +759,7 @@ class Game:
             # edited title screen to show controls including new shooting and reloading mechanics
             self._draw_center_message(
                 "Projectile Shooter",
-                "ENTER: start   ESC: QUIT  SPACE: shoot   R: reload   1/2/3: weapon   SHIFT: dash   C: scheme   P: mode   F1: debug",
+                "ENTER: start   ESC: QUIT  SPACE: shoot   R: reload   1/2/3: feel   SHIFT: dash   C: scheme   P: mode   F1: debug",
             )
         
         if self.wave_manager.wave_complete and not self.wave_manager.all_waves_done:
