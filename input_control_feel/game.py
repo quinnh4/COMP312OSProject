@@ -32,7 +32,7 @@ class Projectile:
     def draw(self, screen: pygame.Surface) -> None:
         pygame.draw.circle(screen, self.color, (int(self.position.x), int(self.position.y)), self.radius)
 
-@dataclass(frozen=True)
+@dataclass
 class FeelPreset:
     name: str
 
@@ -61,6 +61,9 @@ class Game:
     SCREEN_W, SCREEN_H = 960, 540
     HUD_H = 54
     PLAYFIELD_PADDING = 10
+
+    PLAYER_MAX_HP = 100
+    DAMAGE_COOLDOWN = 0.5  # invincibility frames after taking damage
 
     PLAYER_SIZE = 32
 
@@ -97,6 +100,9 @@ class Game:
         self.player_pos = pygame.Vector2(self.playfield.center)
         self.player_vel = pygame.Vector2(0, 0)
         self.player_rect.center = self.player_pos
+
+        self.player_hp = self.PLAYER_MAX_HP
+        self.damage_cooldown_left = 0.0
 
         self.on_ground = True
         self.jump_requested = False
@@ -192,6 +198,16 @@ class Game:
         self.dash_cooldown_left = 0.0
         self.last_move_dir = pygame.Vector2(1, 0)
 
+        # reset player health
+        self.player_hp = self.PLAYER_MAX_HP
+        self.damage_cooldown_left = 0.0
+
+        # reset max ammo to base stats
+        if hasattr(self, 'presets') and len(self.presets) == 3:
+            self.presets[0].ammo_max = 8
+            self.presets[1].ammo_max = 12
+            self.presets[2].ammo_max = 5
+
         # reset shooting system
         self.projectiles.clear()
         self.ammo_current = self.preset.ammo_max
@@ -201,6 +217,7 @@ class Game:
 
         self.wave_manager = WaveManager(self.playfield)
         self.wave_manager.start_wave()
+        self.reward_given_for_wave = False
 
         if not keep_state:
             self.state = "play"
@@ -236,7 +253,7 @@ class Game:
             return
 
         # changed to start game with ENTER key to avoid conflict with shooting key
-        if self.state == "title" and event.key in {pygame.K_RETURN, pygame.K_KP_ENTER}:
+        if self.state in {"title", "game_over", "victory"} and event.key in {pygame.K_RETURN, pygame.K_KP_ENTER}:
             self.state = "play"
             self._reset(keep_state=True)
             return
@@ -487,6 +504,9 @@ class Game:
         if self.dash_cooldown_left > 0:
             self.dash_cooldown_left = max(0.0, self.dash_cooldown_left - dt)
 
+        if self.damage_cooldown_left > 0:
+            self.damage_cooldown_left = max(0.0, self.damage_cooldown_left - dt)
+
         # update shooting cooldowns
         if self.fire_cooldown_left > 0:
             self.fire_cooldown_left = max(0.0, self.fire_cooldown_left - dt)
@@ -499,6 +519,10 @@ class Game:
                 self.ammo_current = self.preset.ammo_max
                 self.is_reloading = False
                 self.reload_cooldown_left = 0.0
+
+        # auto-reload when ammo reaches 0
+        if self.ammo_current <= 0 and not self.is_reloading:
+            self._try_reload()
 
         p = self.preset
 
@@ -562,36 +586,95 @@ class Game:
             if not self.playfield.collidepoint(projectile.position.x, projectile.position.y):
                 self.projectiles.remove(projectile)
 
+        # HEAVY-CANNON preset deals 2x damage to enemies
+        proj_damage = 2.0 if self.preset.name == "HEAVY-CANNON" else 1.0
+        # for the final wave, the power of each weapon needs to be increased by 25%
+        if self.wave_manager.wave_number >= 5:
+            proj_damage *= 1.25
+            
         self.projectiles = self.wave_manager.check_projectile_hits(
             self.projectiles,
-            damage=1,
+            damage=proj_damage,
             impulse=200.0,
         )
         self.wave_manager.update(dt, self.player_pos)
  
         if self.wave_manager.wave_complete:
+            if not getattr(self, "reward_given_for_wave", False) and not self.wave_manager.all_waves_done:
+                self.reward_given_for_wave = True
+                for p in self.presets:
+                    p.ammo_max += 3
+                # top up current ammo since max ammo increased
+                self.ammo_current = min(self.preset.ammo_max, self.ammo_current + 3)
+
             self.wave_manager.transition_timer -= dt
             if self.wave_manager.transition_timer <= 0:
                 still_going = self.wave_manager.advance_wave()
                 if not still_going:
                     self.state = "victory"
+                else:
+                    self.reward_given_for_wave = False
  
         if self.wave_manager.all_waves_done:
             self.state = "victory"
 
-        hit_rect = self.player_rect.inflate(-self.PLAYER_SIZE // 2, -self.PLAYER_SIZE // 2)
-        for enemy in self.wave_manager.enemies:
-            if enemy.alive and enemy.rect.colliderect(hit_rect):
-                print("Player hit!")  # placeholder until you add HP later
-                break
+        # enemy contact damage exactly on touch, with specific scaling and boss cases
+        hit_rect = self.player_rect
+        if self.damage_cooldown_left <= 0:
+            for enemy in self.wave_manager.enemies:
+                if enemy.alive and enemy.rect.colliderect(hit_rect):
+                    if enemy.is_boss:
+                        damage = 10.0
+                    else:
+                        wave_num = self.wave_manager.wave_number
+                        # base damage scaled up by 50% per wave after the first
+                        wave_scaling = 1.0 + 0.50 * (wave_num - 1)
+                        damage = enemy.contact_damage * wave_scaling
+                    self.player_hp -= damage
+                    self.damage_cooldown_left = self.DAMAGE_COOLDOWN
+                    if self.player_hp <= 0:
+                        self.player_hp = 0
+                        self.state = "game_over"
+                    break
+
+    def _draw_health_bar(self) -> None:
+        """Draw the player health bar at the top of the HUD."""
+        bar_x = 14
+        bar_y = 4
+        bar_w = 200
+        bar_h = 10
+
+        hp_ratio = max(0, self.player_hp / self.PLAYER_MAX_HP)
+
+        # background
+        pygame.draw.rect(self.screen, (40, 10, 10), (bar_x, bar_y, bar_w, bar_h), border_radius=3)
+        # fill — shifts from green to red as HP drops
+        fill_w = int(bar_w * hp_ratio)
+        if hp_ratio > 0.6:
+            bar_color = (80, 200, 80)
+        elif hp_ratio > 0.3:
+            bar_color = (220, 180, 40)
+        else:
+            bar_color = (220, 50, 50)
+        if fill_w > 0:
+            pygame.draw.rect(self.screen, bar_color, (bar_x, bar_y, fill_w, bar_h), border_radius=3)
+        # border
+        pygame.draw.rect(self.screen, (180, 180, 180), (bar_x, bar_y, bar_w, bar_h), width=1, border_radius=3)
+        # label
+        display_hp = max(0.0, float(self.player_hp))
+        hp_label = self.font.render(f"HP {display_hp:.1f}/{self.PLAYER_MAX_HP}", True, (216, 222, 233))
+        self.screen.blit(hp_label, (bar_x + bar_w + 8, bar_y - 2))
 
     def _draw_hud(self) -> None:
         pygame.draw.rect(self.screen, (46, 52, 64), pygame.Rect(0, 0, self.SCREEN_W, self.HUD_H))
 
+        # draw health bar at top of HUD
+        self._draw_health_bar()
+
         control = "PLATFORMER" if self.platformer_mode else "TOPDOWN"
         left = (
             f"Bounds: {self.boundary_mode.value.upper()}   Control: {control}   "
-            f"Scheme: {self.control_scheme.value}   Feel: {self.preset.name}"
+            f"Scheme: {self.control_scheme.value}   Feel: {self.preset.name}   "
             f"Wave: {self.wave_manager.wave_number}/{self.wave_manager.total_waves}"
         )
 
@@ -609,8 +692,8 @@ class Game:
         left_surf = self.font.render(left, True, (216, 222, 233))
         right_surf = self.font.render(right, True, (216, 222, 233))
 
-        self.screen.blit(left_surf, (14, 16))
-        self.screen.blit(right_surf, (self.SCREEN_W - right_surf.get_width() - 14, 16))
+        self.screen.blit(left_surf, (14, 20))
+        self.screen.blit(right_surf, (self.SCREEN_W - right_surf.get_width() - 14, 20))
 
     def _draw_debug(self) -> None:
         p = self.preset
@@ -660,8 +743,12 @@ class Game:
         for projectile in self.projectiles:
             projectile.draw(self.screen)
 
-        # Player
-        pygame.draw.rect(self.screen, (136, 192, 208), self.player_rect, border_radius=6)
+        # Player — flash red when recently damaged
+        if self.damage_cooldown_left > 0 and int(self.damage_cooldown_left * 10) % 2 == 0:
+            player_color = (255, 80, 80)
+        else:
+            player_color = (136, 192, 208)
+        pygame.draw.rect(self.screen, player_color, self.player_rect, border_radius=6)
 
         self._draw_hud()
 
@@ -672,14 +759,22 @@ class Game:
             # edited title screen to show controls including new shooting and reloading mechanics
             self._draw_center_message(
                 "Projectile Shooter",
-                "ENTER: start   ESC: QUIT  SPACE: shoot   R: reload   1/2/3: feel   SHIFT: dash   C: scheme   P: mode   F1: debug",
+                "ENTER: start   ESC: QUIT  SPACE: shoot   R: reload   1/2/3: weapon   SHIFT: dash   C: scheme   P: mode   F1: debug",
             )
         
         if self.wave_manager.wave_complete and not self.wave_manager.all_waves_done:
+            if self.wave_manager.wave_number == 4:
+                msg1 = f"Wave {self.wave_manager.wave_number} Clear! +3 Max Ammo! +25% Power!"
+            else:
+                msg1 = f"Wave {self.wave_manager.wave_number} Clear! +3 Max Ammo!"
+            
             self._draw_center_message(
-                f"Wave {self.wave_manager.wave_number} Clear!",
+                msg1,
                 f"Next wave in {self.wave_manager.transition_timer:.1f}s...",
             )
  
         if self.state == "victory":
             self._draw_center_message("YOU WIN!", f"Kills: {self.wave_manager.total_kills}   ENTER to restart")
+
+        if self.state == "game_over":
+            self._draw_center_message("GAME OVER", f"Kills: {self.wave_manager.total_kills}   ENTER to restart")
