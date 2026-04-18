@@ -26,7 +26,7 @@ class Enemy:
     def alive(self) -> bool:
         return self.hp > 0
 
-    def take_hit(self, damage: int, knockback_dir: pygame.Vector2, impulse: float) -> None:
+    def take_hit(self, damage: float, knockback_dir: pygame.Vector2, impulse: float) -> None:
         self.hp = max(0, self.hp - damage)
         if knockback_dir.length_squared() > 0:
             self.velocity += knockback_dir.normalize() * (impulse / self.knockback_resistance)
