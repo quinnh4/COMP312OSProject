@@ -4,6 +4,7 @@ import random
 import pygame
 
 from input_control_feel.enemy import Enemy
+from input_control_feel.obstacle import Obstacle
 
 
 @dataclass(frozen=True)
@@ -19,65 +20,23 @@ class WaveConfig:
 
 
 WAVE_CONFIGS: list[WaveConfig] = [
-    WaveConfig(
-        wave_number=1,
-        enemy_count=6,
-        enemy_hp=2,
-        enemy_speed=30.0,
-        enemy_size=22,
-        enemy_color=(80, 140, 80),
-        spawn_interval=1.2,
-    ),
-    WaveConfig(
-        wave_number=2,
-        enemy_count=10,
-        enemy_hp=3,
-        enemy_speed=40.0,
-        enemy_size=24,
-        enemy_color=(60, 160, 60),
-        spawn_interval=0.9,
-    ),
-    WaveConfig(
-        wave_number=3,
-        enemy_count=14,
-        enemy_hp=4,
-        enemy_speed=50.0,
-        enemy_size=26,
-        enemy_color=(180, 120, 30),
-        spawn_interval=0.7,
-    ),
-    WaveConfig(
-        wave_number=4,
-        enemy_count=18,
-        enemy_hp=6,
-        enemy_speed=60.0,
-        enemy_size=28,
-        enemy_color=(160, 60, 60),
-        spawn_interval=0.55,
-    ),
-    WaveConfig(
-        wave_number=5,
-        enemy_count=1,
-        enemy_hp=120,
-        enemy_speed=35.0,
-        enemy_size=72,
-        enemy_color=(100, 20, 140),
-        spawn_interval=0.0,
-        is_boss_wave=True,
-    ),
+    WaveConfig(1,  6, 2, 30.0, 22, (80, 140, 80),  1.2),
+    WaveConfig(2, 10, 3, 40.0, 24, (60, 160, 60),  0.9),
+    WaveConfig(3, 14, 4, 50.0, 26, (180, 120, 30), 0.7),
+    WaveConfig(4, 18, 6, 60.0, 28, (160, 60, 60),  0.55),
+    WaveConfig(5,  1, 120, 35.0, 72, (100, 20, 140), 0.0, is_boss_wave=True),
 ]
 
-BOSS_MINION_COUNT  = 6
-BOSS_MINION_HP     = 3
-BOSS_MINION_SPEED  = 85.0
-BOSS_MINION_SIZE   = 20
-BOSS_MINION_COLOR  = (130, 40, 170)
+
+BOSS_MINION_COUNT     = 6
+BOSS_MINION_HP        = 3
+BOSS_MINION_SPEED     = 85.0
+BOSS_MINION_SIZE      = 20
+BOSS_MINION_COLOR     = (130, 40, 170)
 WAVE_TRANSITION_DELAY = 3.0
 
 
-# spawning and tracking progress for each wave
 class WaveManager:
-
     def __init__(self, playfield: pygame.Rect) -> None:
         self.playfield = playfield
         self.current_wave_idx = 0
@@ -85,10 +44,12 @@ class WaveManager:
         self.spawn_queue = 0
         self.minion_queue = 0
         self.spawn_timer = 0.0
-        self.transition_timer = 0.0  # counts down between waves
+        self.transition_timer = 0.0
         self.total_kills = 0
         self.wave_complete = False
         self.all_waves_done = False
+        # obstacles for the current wave (set by Game)
+        self.obstacles: list[Obstacle] = []
 
     @property
     def cfg(self) -> WaveConfig:
@@ -133,20 +94,20 @@ class WaveManager:
 
         if is_boss:
             e = Enemy(pos, cfg.enemy_hp, cfg.enemy_hp, cfg.enemy_speed,
-                      cfg.enemy_size, cfg.enemy_color,
-                      is_boss=True, contact_damage=2, knockback_resistance=4.0)
+                     cfg.enemy_size, cfg.enemy_color,
+                     is_boss=True, contact_damage=2, knockback_resistance=4.0)
         elif is_minion:
             e = Enemy(pos, BOSS_MINION_HP, BOSS_MINION_HP, BOSS_MINION_SPEED,
-                      BOSS_MINION_SIZE, BOSS_MINION_COLOR,
-                      is_boss=False, contact_damage=1, knockback_resistance=1.0)
+                     BOSS_MINION_SIZE, BOSS_MINION_COLOR,
+                     is_boss=False, contact_damage=1, knockback_resistance=1.0)
         else:
             e = Enemy(pos, cfg.enemy_hp, cfg.enemy_hp, cfg.enemy_speed,
-                      cfg.enemy_size, cfg.enemy_color,
-                      is_boss=False, contact_damage=1, knockback_resistance=1.0)
+                     cfg.enemy_size, cfg.enemy_color,
+                     is_boss=False, contact_damage=1, knockback_resistance=1.0)
 
         self.enemies.append(e)
 
-    def update(self, dt: float, player_pos: pygame.Vector2) -> None:
+    def update(self, dt: float, player_pos: pygame.Vector2, on_enemy_killed=None) -> None:
         # Spawn regular enemies
         if self.spawn_queue > 0:
             self.spawn_timer -= dt
@@ -163,14 +124,20 @@ class WaveManager:
                 self.minion_queue -= 1
                 self.spawn_timer = 1.0
 
-        # Update each enemy
+        # Update each enemy (now with obstacles awareness)
         for e in self.enemies:
-            e.update(dt, player_pos, self.playfield, self.enemies)  
+            e.update(dt, player_pos, self.playfield, self.enemies, self.obstacles)
 
-        # Remove dead enemies
-        before = len(self.enemies)
-        self.enemies = [e for e in self.enemies if e.alive]
-        self.total_kills += before - len(self.enemies)
+        # Remove dead enemies, notifying callback for each so power-ups can drop
+        survivors = []
+        for e in self.enemies:
+            if e.alive:
+                survivors.append(e)
+            else:
+                self.total_kills += 1
+                if on_enemy_killed is not None:
+                    on_enemy_killed(e)
+        self.enemies = survivors
 
         # Check wave clear
         all_spawned = self.spawn_queue == 0 and self.minion_queue == 0
@@ -178,7 +145,6 @@ class WaveManager:
             self.wave_complete = True
             self.transition_timer = WAVE_TRANSITION_DELAY
 
-    # call once transition_timer has expired. returns True if more waves remain
     def advance_wave(self) -> bool:
         self.current_wave_idx += 1
         if self.current_wave_idx >= len(WAVE_CONFIGS):
@@ -187,8 +153,7 @@ class WaveManager:
         self.start_wave()
         return True
 
-    # check each projectile against all enemies. removes projectiles that hit and applies damage. returns the surviving projectile list.
-    def check_projectile_hits(self, projectiles: list, damage: int, impulse: float) -> list:
+    def check_projectile_hits(self, projectiles: list, damage: float, impulse: float) -> list:
         surviving = []
         for proj in projectiles:
             hit = False

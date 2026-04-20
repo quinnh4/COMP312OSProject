@@ -31,7 +31,8 @@ class Enemy:
         if knockback_dir.length_squared() > 0:
             self.velocity += knockback_dir.normalize() * (impulse / self.knockback_resistance)
 
-    def update(self, dt: float, target_pos: pygame.Vector2, playfield: pygame.Rect, neighbours: list[Enemy] | None = None) -> None:
+    def update(self, dt: float, target_pos: pygame.Vector2, playfield: pygame.Rect,
+               neighbours: list[Enemy] | None = None, obstacles: list | None = None) -> None:
         to_target = target_pos - self.position
         if to_target.length_squared() > 0:
             chase = to_target.normalize() * self.speed
@@ -57,7 +58,35 @@ class Enemy:
         if self.velocity.length() > max_v:
             self.velocity.scale_to_length(max_v)
 
+        # store previous position and attempt move
+        prev_pos = pygame.Vector2(self.position)
         self.position += self.velocity * dt
+
+        # obstacle collision: axis-separated so enemies can slide along walls
+        if obstacles:
+            # X axis
+            test_rect = pygame.Rect(0, 0, self.size, self.size)
+            test_rect.center = (int(self.position.x), int(prev_pos.y))
+            for ob in obstacles:
+                if test_rect.colliderect(ob.rect):
+                    if self.position.x > prev_pos.x:
+                        test_rect.right = ob.rect.left
+                    elif self.position.x < prev_pos.x:
+                        test_rect.left = ob.rect.right
+                    self.position.x = test_rect.centerx
+                    self.velocity.x = 0
+
+            # Y axis
+            test_rect = pygame.Rect(0, 0, self.size, self.size)
+            test_rect.center = (int(self.position.x), int(self.position.y))
+            for ob in obstacles:
+                if test_rect.colliderect(ob.rect):
+                    if self.position.y > prev_pos.y:
+                        test_rect.bottom = ob.rect.top
+                    elif self.position.y < prev_pos.y:
+                        test_rect.top = ob.rect.bottom
+                    self.position.y = test_rect.centery
+                    self.velocity.y = 0
 
         # hard position correction so enemies cannot overlap each other
         if neighbours:
@@ -78,8 +107,8 @@ class Enemy:
             self.position += player_diff.normalize() * (player_min_dist - player_dist)
 
         half = self.size // 2
-        self.position.x = max(playfield.left + half, min(playfield.right  - half, self.position.x))
-        self.position.y = max(playfield.top  + half, min(playfield.bottom - half, self.position.y))
+        self.position.x = max(playfield.left + half, min(playfield.right - half, self.position.x))
+        self.position.y = max(playfield.top + half,  min(playfield.bottom - half, self.position.y))
 
     def draw(self, screen: pygame.Surface, font: pygame.font.Font) -> None:
         r = self.rect
