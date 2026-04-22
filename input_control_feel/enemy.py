@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 import pygame
+from input_control_feel.sprite_manager import SpriteAnimator
 
 
 @dataclass
@@ -15,6 +16,8 @@ class Enemy:
     contact_damage: int = 1
     knockback_resistance: float = 1.0
     velocity: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
+    sprite_animator: SpriteAnimator | None = None
+    _was_moving: bool = field(default=False, init=False, repr=False)
 
     @property
     def rect(self) -> pygame.Rect:
@@ -110,13 +113,35 @@ class Enemy:
         self.position.x = max(playfield.left + half, min(playfield.right - half, self.position.x))
         self.position.y = max(playfield.top + half,  min(playfield.bottom - half, self.position.y))
 
+        # Update sprite animation based on movement state
+        if self.sprite_animator:
+            is_moving = self.velocity.length_squared() > 100  # Movement threshold
+            
+            if is_moving:
+                self.sprite_animator.set_animation("move")
+            else:
+                self.sprite_animator.set_animation("idle")
+            
+            self.sprite_animator.update(dt)
+            self._was_moving = is_moving
+
     def draw(self, screen: pygame.Surface, font: pygame.font.Font) -> None:
         r = self.rect
-        pygame.draw.rect(screen, self.color, r, border_radius=4)
-        outline = (255, 80, 80) if self.is_boss else (200, 60, 60)
-        pygame.draw.rect(screen, outline, r, width=2, border_radius=4)
+        
+        # Draw sprite if available, otherwise fallback to colored rectangle
+        if self.sprite_animator:
+            frame = self.sprite_animator.get_current_frame()
+            # Scale frame to match enemy size if needed
+            if frame.get_width() != self.size or frame.get_height() != self.size:
+                frame = pygame.transform.scale(frame, (self.size, self.size))
+            screen.blit(frame, r.topleft)
+        else:
+            # Fallback to colored rectangle
+            pygame.draw.rect(screen, self.color, r, border_radius=4)
+            outline = (255, 80, 80) if self.is_boss else (200, 60, 60)
+            pygame.draw.rect(screen, outline, r, width=2, border_radius=4)
 
-        # health bar
+        # health bar (always shown)
         bar_h = 5
         bar_y = r.top - bar_h - 3
         pygame.draw.rect(screen, (60, 0, 0), (r.left, bar_y, self.size, bar_h))

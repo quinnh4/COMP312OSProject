@@ -2,9 +2,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import random
 import pygame
+import os
 
 from input_control_feel.enemy import Enemy
 from input_control_feel.obstacle import Obstacle
+from input_control_feel.sprite_manager import SpriteAnimator
 
 
 @dataclass(frozen=True)
@@ -20,23 +22,26 @@ class WaveConfig:
 
 
 WAVE_CONFIGS: list[WaveConfig] = [
-    WaveConfig(1,  6, 2, 30.0, 22, (80, 140, 80),  1.2),
-    WaveConfig(2, 10, 3, 40.0, 24, (60, 160, 60),  0.9),
-    WaveConfig(3, 14, 4, 50.0, 26, (180, 120, 30), 0.7),
-    WaveConfig(4, 18, 6, 60.0, 28, (160, 60, 60),  0.55),
-    WaveConfig(5,  1, 120, 35.0, 72, (100, 20, 140), 0.0, is_boss_wave=True),
+    WaveConfig(1,  6, 2, 30.0, 40, (80, 140, 80),  1.2),
+    WaveConfig(2, 10, 3, 40.0, 44, (60, 160, 60),  0.9),
+    WaveConfig(3, 14, 4, 50.0, 48, (180, 120, 30), 0.7),
+    WaveConfig(4, 18, 6, 60.0, 52, (160, 60, 60),  0.55),
+    WaveConfig(5,  1, 120, 35.0, 100, (100, 20, 140), 0.0, is_boss_wave=True),
 ]
 
 
 BOSS_MINION_COUNT     = 6
 BOSS_MINION_HP        = 3
 BOSS_MINION_SPEED     = 85.0
-BOSS_MINION_SIZE      = 20
+BOSS_MINION_SIZE      = 32
 BOSS_MINION_COLOR     = (130, 40, 170)
 WAVE_TRANSITION_DELAY = 3.0
 
 
 class WaveManager:
+    # Sprite animator (shared across all enemies to reduce memory)
+    _sprite_animator: SpriteAnimator | None = None
+    
     def __init__(self, playfield: pygame.Rect) -> None:
         self.playfield = playfield
         self.current_wave_idx = 0
@@ -50,6 +55,59 @@ class WaveManager:
         self.all_waves_done = False
         # obstacles for the current wave (set by Game)
         self.obstacles: list[Obstacle] = []
+        
+        # Try to load sprite animator
+        WaveManager._load_sprite_animator()
+
+    @staticmethod
+    def _load_sprite_animator() -> None:
+        """Attempt to load sprite animator for enemies. Gracefully skips if sprite not found."""
+        if WaveManager._sprite_animator is not None:
+            return  # Already loaded
+        
+        # CONFIGURATION: Update these to match your sprite sheet
+        sprite_path = "input_control_feel/sprites/Zombie.png"
+        
+        if not os.path.exists(sprite_path):
+            # Sprite file not found - enemies will render as colored boxes
+            return
+        
+        try:
+            WaveManager._sprite_animator = SpriteAnimator(
+                sprite_sheet_path=sprite_path,
+                frame_width=32,              # Zombie frame width
+                frame_height=32,             # Zombie frame height
+                frames_per_row=13,           # 416 px / 32 px = 13 frames per row
+                animations={
+                    "idle": (0, 8),          # Row 0: Idle animation, 8 frames
+                    "move": (26, 8),         # Row 2: Movement animation, 8 frames (frames 26-33)
+                    "attack": (13, 7),       # Row 1: Attack animation, 7 frames (frames 13-19)
+                }
+            )
+            print(f"[WaveManager] Loaded sprite animator from {sprite_path}")
+        except Exception as e:
+            print(f"[WaveManager] Failed to load sprite animator: {e}")
+            WaveManager._sprite_animator = None
+    
+    @staticmethod
+    def get_sprite_animator() -> SpriteAnimator | None:
+        """Get sprite animator instance (creates a new one per enemy for animation independence)."""
+        if WaveManager._sprite_animator is None:
+            return None
+        
+        # Return a new animator instance with same config
+        try:
+            animator = SpriteAnimator(
+                sprite_sheet_path=WaveManager._sprite_animator.sprite_sheet_path,
+                frame_width=WaveManager._sprite_animator.frame_width,
+                frame_height=WaveManager._sprite_animator.frame_height,
+                frames_per_row=WaveManager._sprite_animator.frames_per_row,
+                animations=WaveManager._sprite_animator.animations,
+            )
+            return animator
+        except Exception as e:
+            print(f"[WaveManager] Failed to create animator: {e}")
+            return None
 
     @property
     def cfg(self) -> WaveConfig:
@@ -91,19 +149,25 @@ class WaveManager:
     def _spawn(self, is_boss=False, is_minion=False) -> None:
         cfg = self.cfg
         pos = self._spawn_point()
+        
+        # Get sprite animator if available (safe to pass None)
+        animator = WaveManager.get_sprite_animator()
 
         if is_boss:
             e = Enemy(pos, cfg.enemy_hp, cfg.enemy_hp, cfg.enemy_speed,
                      cfg.enemy_size, cfg.enemy_color,
-                     is_boss=True, contact_damage=2, knockback_resistance=4.0)
+                     is_boss=True, contact_damage=2, knockback_resistance=4.0,
+                     sprite_animator=animator)
         elif is_minion:
             e = Enemy(pos, BOSS_MINION_HP, BOSS_MINION_HP, BOSS_MINION_SPEED,
                      BOSS_MINION_SIZE, BOSS_MINION_COLOR,
-                     is_boss=False, contact_damage=1, knockback_resistance=1.0)
+                     is_boss=False, contact_damage=1, knockback_resistance=1.0,
+                     sprite_animator=animator)
         else:
             e = Enemy(pos, cfg.enemy_hp, cfg.enemy_hp, cfg.enemy_speed,
                      cfg.enemy_size, cfg.enemy_color,
-                     is_boss=False, contact_damage=1, knockback_resistance=1.0)
+                     is_boss=False, contact_damage=1, knockback_resistance=1.0,
+                     sprite_animator=animator)
 
         self.enemies.append(e)
 
