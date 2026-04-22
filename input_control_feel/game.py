@@ -8,6 +8,7 @@ from input_control_feel.obstacle import (
     build_layout_for_wave, resolve_rect_collision, projectile_hits_obstacle, draw_obstacles
 )
 from input_control_feel.title_screen import TitleScreen, PauseMenu
+from input_control_feel.sprite_manager import PlayerSpriteAnimator, PlayerDirection
 
 import pygame
 
@@ -68,6 +69,7 @@ class Game:
 
     PLAYER_MAX_HP = 100
     DAMAGE_COOLDOWN = 0.5
+    DEATH_ANIM_DURATION = 0.6
 
     PLAYER_SIZE = 32
 
@@ -103,7 +105,7 @@ class Game:
 
         self.boundary_mode = BoundaryMode.CLAMP
         self.platformer_mode = False
-        # states: "title", "play", "paused", "game_over", "victory"
+        # states: "title", "play", "dying", "paused", "game_over", "victory"
         self.state = "title"
         # main loop watches this to know when a quit button was clicked
         self.should_quit = False
@@ -115,6 +117,7 @@ class Game:
 
         self.player_hp = self.PLAYER_MAX_HP
         self.damage_cooldown_left = 0.0
+        self.death_anim_timer = 0.0
 
         self.on_ground = True
         self.jump_requested = False
@@ -131,6 +134,12 @@ class Game:
 
         self.dash_cooldown_left = 0.0
         self.last_move_dir = pygame.Vector2(1, 0)
+        
+        # Player sprite animator
+        self.player_sprite_animator = PlayerSpriteAnimator(
+            "input_control_feel/sprites/Player",
+            player_size=self.PLAYER_SIZE
+        )
 
         self.projectiles: list[Projectile] = []
         self.ammo_current = self.preset.ammo_max
@@ -206,6 +215,7 @@ class Game:
 
         self.player_hp = self.PLAYER_MAX_HP
         self.damage_cooldown_left = 0.0
+        self.death_anim_timer = 0.0
 
         if hasattr(self, 'presets') and len(self.presets) == 3:
             self.presets[0].ammo_max = 8
@@ -521,6 +531,15 @@ class Game:
             self.title_screen.update(dt)
             return
 
+        # death animation phase before game-over screen
+        if self.state == "dying":
+            self.player_sprite_animator.set_animation("death")
+            self.player_sprite_animator.update(dt)
+            self.death_anim_timer = max(0.0, self.death_anim_timer - dt)
+            if self.death_anim_timer <= 0:
+                self.state = "game_over"
+            return
+
         # pause + game over + victory: no simulation
         if self.state != "play":
             return
@@ -659,6 +678,33 @@ class Game:
         if self.wave_manager.all_waves_done:
             self.state = "victory"
 
+        # Update player sprite animation based on movement state
+        if self.player_hp > 0:
+            # Determine direction from last_move_dir
+            if self.last_move_dir.length_squared() > 0:
+                normalized_dir = self.last_move_dir.normalize()
+                # Determine which direction the player is facing
+                if abs(normalized_dir.x) > abs(normalized_dir.y):
+                    direction = PlayerDirection.RIGHT if normalized_dir.x > 0 else PlayerDirection.LEFT
+                else:
+                    direction = PlayerDirection.DOWN if normalized_dir.y > 0 else PlayerDirection.UP
+            else:
+                direction = PlayerDirection.DOWN
+            
+            # Check if player is moving
+            is_moving = self.player_vel.length_squared() > 100
+            
+            if is_moving:
+                self.player_sprite_animator.set_animation("run", direction)
+            else:
+                self.player_sprite_animator.set_animation("idle")
+            
+            self.player_sprite_animator.update(dt)
+        else:
+            # Player is dead
+            self.player_sprite_animator.set_animation("death")
+            self.player_sprite_animator.update(dt)
+
         # enemy contact damage (shield absorbs first)
         hit_rect = self.player_rect
         if self.damage_cooldown_left <= 0:
@@ -679,7 +725,8 @@ class Game:
                     self.damage_cooldown_left = self.DAMAGE_COOLDOWN
                     if self.player_hp <= 0:
                         self.player_hp = 0
-                        self.state = "game_over"
+                        self.death_anim_timer = self.DEATH_ANIM_DURATION
+                        self.state = "dying"
                     break
 
     def _draw_health_bar(self) -> None:
@@ -796,7 +843,14 @@ class Game:
             player_color = (255, 80, 80)
         else:
             player_color = (136, 192, 208)
-        pygame.draw.rect(self.screen, player_color, self.player_rect, border_radius=6)
+
+        # Draw player sprite if available, otherwise fallback to colored rectangle
+        player_frame = self.player_sprite_animator.get_current_frame()
+        if player_frame:
+            player_dest = player_frame.get_rect(center=self.player_rect.center)
+            self.screen.blit(player_frame, player_dest.topleft)
+        else:
+            pygame.draw.rect(self.screen, player_color, self.player_rect, border_radius=6)
 
         # shield ring on top of player
         self.powerup_manager.draw_shield_ring(self.screen, self.player_rect.center)
