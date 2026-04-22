@@ -7,6 +7,7 @@ from input_control_feel.powerup import PowerUpManager
 from input_control_feel.obstacle import (
     build_layout_for_wave, resolve_rect_collision, projectile_hits_obstacle, draw_obstacles
 )
+from input_control_feel.title_screen import TitleScreen, PauseMenu
 
 import pygame
 
@@ -87,6 +88,10 @@ class Game:
         self.font = pygame.font.SysFont(None, 22)
         self.small_font = pygame.font.SysFont(None, 16)
         self.big_font = pygame.font.SysFont(None, 48)
+        # chunky pixel-ish font for the title and buttons
+        self.title_font = pygame.font.SysFont("couriernew,consolas,monospace", 56, bold=True)
+        self.pause_title_font = pygame.font.SysFont("couriernew,consolas,monospace", 42, bold=True)
+        self.button_font = pygame.font.SysFont("couriernew,consolas,monospace", 22, bold=True)
 
         self.screen_rect = pygame.Rect(0, 0, self.SCREEN_W, self.SCREEN_H)
         self.playfield = pygame.Rect(
@@ -98,7 +103,10 @@ class Game:
 
         self.boundary_mode = BoundaryMode.CLAMP
         self.platformer_mode = False
+        # states: "title", "play", "paused", "game_over", "victory"
         self.state = "title"
+        # main loop watches this to know when a quit button was clicked
+        self.should_quit = False
 
         self.player_rect = pygame.Rect(0, 0, self.PLAYER_SIZE, self.PLAYER_SIZE)
         self.player_pos = pygame.Vector2(self.playfield.center)
@@ -136,6 +144,16 @@ class Game:
         self._ensure_player_not_in_obstacle()
         self.wave_manager.start_wave()
         self.reward_given_for_wave = False
+
+        # title + pause UI
+        self.title_screen = TitleScreen(
+            self.SCREEN_W, self.SCREEN_H,
+            self.title_font, self.button_font, self.small_font,
+        )
+        self.pause_menu = PauseMenu(
+            self.SCREEN_W, self.SCREEN_H,
+            self.pause_title_font, self.button_font, self.small_font,
+        )
 
     @property
     def preset(self) -> FeelPreset:
@@ -210,12 +228,67 @@ class Game:
         if not keep_state:
             self.state = "play"
 
+    # menu button dispatch (title + pause)
+    def _handle_menu_action(self, action: str) -> None:
+        if action == "start":
+            self._reset(keep_state=False)  # fresh game
+            self.state = "play"
+        elif action == "resume":
+            if self.state == "paused":
+                self.state = "play"
+        elif action == "restart":
+            self._reset(keep_state=False)
+            self.state = "play"
+        elif action == "menu":
+            self.state = "title"
+            # reset so coming back from title is clean
+            self._reset(keep_state=True)
+            self.state = "title"
+        elif action == "quit":
+            self.should_quit = True
+
     def handle_event(self, event: pygame.event.Event) -> None:
+        # mouse clicks (title + pause)
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.state == "title":
+                action = self.title_screen.handle_click(event.pos)
+                if action:
+                    self._handle_menu_action(action)
+                return
+            if self.state == "paused":
+                action = self.pause_menu.handle_click(event.pos)
+                if action:
+                    self._handle_menu_action(action)
+                return
+
         if event.type != pygame.KEYDOWN:
             return
 
+        # escape now toggles pause during play instead of hard-quitting,
+        # and backs out to title from paused / game_over / victory
         if event.key == pygame.K_ESCAPE:
-            pygame.event.post(pygame.event.Event(pygame.QUIT))
+            if self.state == "play":
+                self.state = "paused"
+            elif self.state == "paused":
+                self.state = "play"
+            elif self.state in {"game_over", "victory"}:
+                self.state = "title"
+            elif self.state == "title":
+                self.should_quit = True
+            return
+
+        # p toggles pause during play — keeps the old platformer-toggle behavior elsewhere
+        if event.key == pygame.K_p:
+            if self.state == "play":
+                self.state = "paused"
+                return
+            if self.state == "paused":
+                self.state = "play"
+                return
+            # on title / game over / victory keep the old platformer toggle
+            self.platformer_mode = not self.platformer_mode
+            if self.state != "title":
+                self._reset(keep_state=True)
             return
 
         if event.key == pygame.K_F1:
@@ -228,12 +301,6 @@ class Game:
 
         if event.key == pygame.K_c:
             self._cycle_control_scheme()
-            return
-
-        if event.key == pygame.K_p:
-            self.platformer_mode = not self.platformer_mode
-            if self.state != "title":
-                self._reset(keep_state=True)
             return
 
         if event.key == pygame.K_r and event.mod & pygame.KMOD_CTRL:
@@ -449,6 +516,12 @@ class Game:
         self.powerup_manager.maybe_drop_from_enemy(enemy.position, enemy.is_boss, self.obstacles)
 
     def update(self, dt: float) -> None:
+        # animate the title screen even when not playing
+        if self.state == "title":
+            self.title_screen.update(dt)
+            return
+
+        # pause + game over + victory: no simulation
         if self.state != "play":
             return
 
@@ -701,7 +774,8 @@ class Game:
             (self.SCREEN_W // 2 - surf.get_width() // 2,
              self.HUD_H + 30 - lift))
 
-    def draw(self) -> None:
+    def _draw_gameplay(self) -> None:
+        # draws the playfield + HUD — used by both play and paused states
         self.screen.fill((20, 24, 30))
 
         pygame.draw.rect(self.screen, (10, 12, 16), self.playfield)
@@ -733,12 +807,6 @@ class Game:
         if self.debug:
             self._draw_debug()
 
-        if self.state == "title":
-            self._draw_center_message(
-                "Projectile Shooter",
-                "ENTER: start   SPACE: shoot   R: reload   SHIFT: dash   1/2/3: weapon   F1: debug",
-            )
-
         if self.wave_manager.wave_complete and not self.wave_manager.all_waves_done:
             if self.wave_manager.wave_number == 4:
                 msg1 = f"Wave {self.wave_manager.wave_number} Clear! +3 Max Ammo! +25% Power!"
@@ -755,3 +823,15 @@ class Game:
 
         if self.state == "game_over":
             self._draw_center_message("GAME OVER", f"Kills: {self.wave_manager.total_kills}   ENTER to restart")
+
+    def draw(self) -> None:
+        if self.state == "title":
+            self.title_screen.draw(self.screen)
+            return
+
+        # always draw the gameplay scene first
+        self._draw_gameplay()
+
+        # overlay the pause menu on top
+        if self.state == "paused":
+            self.pause_menu.draw(self.screen)
