@@ -17,7 +17,9 @@ class Enemy:
     knockback_resistance: float = 1.0
     velocity: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
     sprite_animator: SpriteAnimator | None = None
+    sprite_animator_left: SpriteAnimator | None = None
     _was_moving: bool = field(default=False, init=False, repr=False)
+    _facing_left: bool = field(default=False, init=False, repr=False)
 
     @property
     def rect(self) -> pygame.Rect:
@@ -113,24 +115,30 @@ class Enemy:
         self.position.x = max(playfield.left + half, min(playfield.right - half, self.position.x))
         self.position.y = max(playfield.top + half,  min(playfield.bottom - half, self.position.y))
 
-        # Update sprite animation based on movement state
-        if self.sprite_animator:
+        # Use actual frame-to-frame horizontal displacement for facing so steering jitter
+        # and collision resolution do not rapidly flip the active sprite sheet.
+        moved_x = self.position.x - prev_pos.x
+        if abs(moved_x) > 0.25:
+            self._facing_left = moved_x < 0
+
+        animators = [animator for animator in (self.sprite_animator, self.sprite_animator_left) if animator]
+        if animators:
             is_moving = self.velocity.length_squared() > 100  # Movement threshold
-            
-            if is_moving:
-                self.sprite_animator.set_animation("move")
-            else:
-                self.sprite_animator.set_animation("idle")
-            
-            self.sprite_animator.update(dt)
+
+            animation_name = "move" if is_moving else "idle"
+            for animator in animators:
+                animator.set_animation(animation_name)
+                animator.update(dt)
+
             self._was_moving = is_moving
 
     def draw(self, screen: pygame.Surface, font: pygame.font.Font) -> None:
         r = self.rect
         
         # Draw sprite if available, otherwise fallback to colored rectangle
-        if self.sprite_animator:
-            frame = self.sprite_animator.get_current_frame()
+        active_animator = self.sprite_animator_left if self._facing_left and self.sprite_animator_left else self.sprite_animator
+        if active_animator:
+            frame = active_animator.get_current_frame()
             # Scale frame to match enemy size if needed
             if frame.get_width() != self.size or frame.get_height() != self.size:
                 frame = pygame.transform.scale(frame, (self.size, self.size))

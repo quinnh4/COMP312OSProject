@@ -64,6 +64,7 @@ class Game:
     fps = 60
 
     SCREEN_W, SCREEN_H = 960, 540
+    MIN_SCREEN_W, MIN_SCREEN_H = 720, 420
     HUD_H = 54
     PLAYFIELD_PADDING = 10
 
@@ -85,15 +86,12 @@ class Game:
             return min(0.0, value + step)
         return 0.0
 
-    def __init__(self) -> None:
-        self.screen = pygame.display.set_mode((self.SCREEN_W, self.SCREEN_H))
-        self.font = pygame.font.SysFont(None, 22)
-        self.small_font = pygame.font.SysFont(None, 16)
-        self.big_font = pygame.font.SysFont(None, 48)
-        # chunky pixel-ish font for the title and buttons
-        self.title_font = pygame.font.SysFont("couriernew,consolas,monospace", 56, bold=True)
-        self.pause_title_font = pygame.font.SysFont("couriernew,consolas,monospace", 42, bold=True)
-        self.button_font = pygame.font.SysFont("couriernew,consolas,monospace", 22, bold=True)
+    def _apply_window_size(self, width: int, height: int, recreate_surface: bool = True) -> None:
+        self.SCREEN_W = max(self.MIN_SCREEN_W, int(width))
+        self.SCREEN_H = max(self.MIN_SCREEN_H, int(height))
+
+        if recreate_surface:
+            self.screen = pygame.display.set_mode((self.SCREEN_W, self.SCREEN_H), pygame.RESIZABLE)
 
         self.screen_rect = pygame.Rect(0, 0, self.SCREEN_W, self.SCREEN_H)
         self.playfield = pygame.Rect(
@@ -102,6 +100,35 @@ class Game:
             self.SCREEN_W - 2 * self.PLAYFIELD_PADDING,
             self.SCREEN_H - self.HUD_H - 2 * self.PLAYFIELD_PADDING,
         )
+
+        if hasattr(self, "wave_manager"):
+            self.wave_manager.playfield = self.playfield
+            self._load_obstacles_for_current_wave()
+            if hasattr(self, "player_rect"):
+                self._apply_bounds_player()
+                self._ensure_player_not_in_obstacle()
+
+        # Rebuild menus so button hitboxes and background elements match the new size.
+        if hasattr(self, "title_font") and hasattr(self, "button_font") and hasattr(self, "small_font"):
+            self.title_screen = TitleScreen(
+                self.SCREEN_W, self.SCREEN_H,
+                self.title_font, self.button_font, self.small_font,
+            )
+            self.pause_menu = PauseMenu(
+                self.SCREEN_W, self.SCREEN_H,
+                self.pause_title_font, self.button_font, self.small_font,
+            )
+
+    def __init__(self) -> None:
+        self.screen = pygame.display.set_mode((self.SCREEN_W, self.SCREEN_H), pygame.RESIZABLE)
+        self.font = pygame.font.SysFont(None, 22)
+        self.small_font = pygame.font.SysFont(None, 16)
+        self.big_font = pygame.font.SysFont(None, 48)
+        # chunky pixel-ish font for the title and buttons
+        self.title_font = pygame.font.SysFont("couriernew,consolas,monospace", 56, bold=True)
+        self.pause_title_font = pygame.font.SysFont("couriernew,consolas,monospace", 42, bold=True)
+        self.button_font = pygame.font.SysFont("couriernew,consolas,monospace", 22, bold=True)
+        self._apply_window_size(self.SCREEN_W, self.SCREEN_H, recreate_surface=False)
 
         self.boundary_mode = BoundaryMode.CLAMP
         self.platformer_mode = False
@@ -258,6 +285,10 @@ class Game:
             self.should_quit = True
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.VIDEORESIZE:
+            self._apply_window_size(event.w, event.h)
+            return
+
         # mouse clicks (title + pause)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.state == "title":
@@ -474,6 +505,15 @@ class Game:
         self.player_vel += dash_dir * self.DASH_IMPULSE
         self.dash_cooldown_left = self.DASH_COOLDOWN
 
+    @staticmethod
+    def _vector_to_direction(vec: pygame.Vector2) -> PlayerDirection:
+        if vec.length_squared() == 0:
+            return PlayerDirection.DOWN
+        v = vec.normalize()
+        if abs(v.x) > abs(v.y):
+            return PlayerDirection.RIGHT if v.x > 0 else PlayerDirection.LEFT
+        return PlayerDirection.DOWN if v.y > 0 else PlayerDirection.UP
+
     def _try_shoot(self) -> None:
         if self.is_reloading:
             return
@@ -487,6 +527,8 @@ class Game:
         if direction.length_squared() == 0:
             direction = pygame.Vector2(1, 0)
         direction = direction.normalize()
+
+        self.player_sprite_animator.trigger_shoot(self._vector_to_direction(direction))
 
         projectile = Projectile(
             position=pygame.Vector2(self.player_pos),
@@ -506,10 +548,15 @@ class Game:
 
         self.is_reloading = True
         self.reload_cooldown_left = self.preset.reload_time
+        self.player_sprite_animator.set_weapon_reloading(
+            True,
+            self._vector_to_direction(self.last_move_dir),
+        )
 
     def _update_ammo_for_preset(self) -> None:
         self.ammo_current = self.preset.ammo_max
         self.is_reloading = False
+        self.player_sprite_animator.set_weapon_reloading(False)
         self.reload_cooldown_left = 0.0
 
     # --- callback for power-up pickups ---
@@ -519,6 +566,7 @@ class Game:
         elif action == "ammo_refill":
             self.ammo_current = self.preset.ammo_max
             self.is_reloading = False
+            self.player_sprite_animator.set_weapon_reloading(False)
             self.reload_cooldown_left = 0.0
 
     # --- callback when wave_manager kills an enemy ---
@@ -558,6 +606,7 @@ class Game:
             if self.reload_cooldown_left <= 0:
                 self.ammo_current = self.preset.ammo_max
                 self.is_reloading = False
+                self.player_sprite_animator.set_weapon_reloading(False)
                 self.reload_cooldown_left = 0.0
 
         if self.ammo_current <= 0 and not self.is_reloading:
@@ -681,15 +730,7 @@ class Game:
         # Update player sprite animation based on movement state
         if self.player_hp > 0:
             # Determine direction from last_move_dir
-            if self.last_move_dir.length_squared() > 0:
-                normalized_dir = self.last_move_dir.normalize()
-                # Determine which direction the player is facing
-                if abs(normalized_dir.x) > abs(normalized_dir.y):
-                    direction = PlayerDirection.RIGHT if normalized_dir.x > 0 else PlayerDirection.LEFT
-                else:
-                    direction = PlayerDirection.DOWN if normalized_dir.y > 0 else PlayerDirection.UP
-            else:
-                direction = PlayerDirection.DOWN
+            direction = self._vector_to_direction(self.last_move_dir)
             
             # Check if player is moving
             is_moving = self.player_vel.length_squared() > 100
@@ -847,8 +888,56 @@ class Game:
         # Draw player sprite if available, otherwise fallback to colored rectangle
         player_frame = self.player_sprite_animator.get_current_frame()
         if player_frame:
+            weapon_frame, fire_frame = self.player_sprite_animator.get_weapon_frames()
+            facing = self._vector_to_direction(self.last_move_dir)
+            weapon_offsets = {
+                PlayerDirection.UP: (0, -10),
+                PlayerDirection.DOWN: (0, 10),
+                PlayerDirection.LEFT: (-11, 1),
+                PlayerDirection.RIGHT: (11, 1),
+            }
+            fire_offsets = {
+                PlayerDirection.UP: (0, -17),
+                PlayerDirection.DOWN: (0, 17),
+                PlayerDirection.LEFT: (-18, 1),
+                PlayerDirection.RIGHT: (18, 1),
+            }
+
+            # Facing up: draw weapon under the player body so it doesn't cover the head.
+            if weapon_frame and facing == PlayerDirection.UP:
+                wx, wy = weapon_offsets[facing]
+                weapon_dest = weapon_frame.get_rect(
+                    center=(self.player_rect.centerx + wx, self.player_rect.centery + wy)
+                )
+                self.screen.blit(weapon_frame, weapon_dest.topleft)
+
             player_dest = player_frame.get_rect(center=self.player_rect.center)
             self.screen.blit(player_frame, player_dest.topleft)
+
+            if weapon_frame and facing != PlayerDirection.UP:
+                wx, wy = weapon_offsets[facing]
+                weapon_dest = weapon_frame.get_rect(
+                    center=(self.player_rect.centerx + wx, self.player_rect.centery + wy)
+                )
+                self.screen.blit(weapon_frame, weapon_dest.topleft)
+
+            if fire_frame and facing == PlayerDirection.UP:
+                fx, fy = fire_offsets[facing]
+                fire_dest = fire_frame.get_rect(
+                    center=(self.player_rect.centerx + fx, self.player_rect.centery + fy)
+                )
+                self.screen.blit(fire_frame, fire_dest.topleft)
+
+            # Re-draw player body on top when facing up so muzzle flash stays behind head
+            if facing == PlayerDirection.UP:
+                self.screen.blit(player_frame, player_dest.topleft)
+
+            if fire_frame and facing != PlayerDirection.UP:
+                fx, fy = fire_offsets[facing]
+                fire_dest = fire_frame.get_rect(
+                    center=(self.player_rect.centerx + fx, self.player_rect.centery + fy)
+                )
+                self.screen.blit(fire_frame, fire_dest.topleft)
         else:
             pygame.draw.rect(self.screen, player_color, self.player_rect, border_radius=6)
 

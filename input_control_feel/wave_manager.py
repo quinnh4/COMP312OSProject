@@ -40,7 +40,8 @@ WAVE_TRANSITION_DELAY = 3.0
 
 class WaveManager:
     # Sprite animator (shared across all enemies to reduce memory)
-    _sprite_animator: SpriteAnimator | None = None
+    _sprite_animator_right: SpriteAnimator | None = None
+    _sprite_animator_left: SpriteAnimator | None = None
     
     def __init__(self, playfield: pygame.Rect) -> None:
         self.playfield = playfield
@@ -62,52 +63,92 @@ class WaveManager:
     @staticmethod
     def _load_sprite_animator() -> None:
         """Attempt to load sprite animator for enemies. Gracefully skips if sprite not found."""
-        if WaveManager._sprite_animator is not None:
+        if WaveManager._sprite_animator_right is not None or WaveManager._sprite_animator_left is not None:
             return  # Already loaded
         
         # CONFIGURATION: Update these to match your sprite sheet
-        sprite_path = "input_control_feel/sprites/Zombie.png"
-        
-        if not os.path.exists(sprite_path):
-            # Sprite file not found - enemies will render as colored boxes
+        right_sprite_path = "input_control_feel/sprites/Zombie-Right.png"
+        left_sprite_path = "input_control_feel/sprites/Zombie-Left.png"
+
+        if not os.path.exists(right_sprite_path) and not os.path.exists(left_sprite_path):
+            # Sprite files not found - enemies will render as colored boxes
             return
         
         try:
-            WaveManager._sprite_animator = SpriteAnimator(
-                sprite_sheet_path=sprite_path,
-                frame_width=32,              # Zombie frame width
-                frame_height=32,             # Zombie frame height
-                frames_per_row=13,           # 416 px / 32 px = 13 frames per row
-                animations={
-                    "idle": (0, 8),          # Row 0: Idle animation, 8 frames
-                    "move": (26, 8),         # Row 2: Movement animation, 8 frames (frames 26-33)
-                    "attack": (13, 7),       # Row 1: Attack animation, 7 frames (frames 13-19)
-                }
-            )
-            print(f"[WaveManager] Loaded sprite animator from {sprite_path}")
+            # Right sheet: frames packed left-to-right from col 0 in each row
+            right_config = {
+                "frame_width": 32,
+                "frame_height": 32,
+                "frames_per_row": 13,
+                "animations": {
+                    "idle":   (0,  8),   # row 0, cols 0-7
+                    "attack": (13, 7),   # row 1, cols 0-6
+                    "move":   (26, 8),   # row 2, cols 0-7
+                },
+            }
+            # Left sheet: frames are mirrored, packed right-to-left so they start
+            # at col 5 (row 0/2) and col 6 (row 1) rather than col 0.
+            left_config = {
+                "frame_width": 32,
+                "frame_height": 32,
+                "frames_per_row": 13,
+                "animations": {
+                    "idle":   (5,  8),   # row 0, cols 5-12
+                    "attack": (19, 7),   # row 1, cols 6-12
+                    "move":   (31, 8),   # row 2, cols 5-12
+                },
+            }
+
+            if os.path.exists(right_sprite_path):
+                WaveManager._sprite_animator_right = SpriteAnimator(
+                    sprite_sheet_path=right_sprite_path,
+                    **right_config,
+                )
+            if os.path.exists(left_sprite_path):
+                WaveManager._sprite_animator_left = SpriteAnimator(
+                    sprite_sheet_path=left_sprite_path,
+                    **left_config,
+                )
+
+            loaded = [path for path, animator in ((right_sprite_path, WaveManager._sprite_animator_right), (left_sprite_path, WaveManager._sprite_animator_left)) if animator is not None]
+            if loaded:
+                print(f"[WaveManager] Loaded sprite animator(s): {', '.join(loaded)}")
         except Exception as e:
             print(f"[WaveManager] Failed to load sprite animator: {e}")
-            WaveManager._sprite_animator = None
+            WaveManager._sprite_animator_right = None
+            WaveManager._sprite_animator_left = None
     
     @staticmethod
-    def get_sprite_animator() -> SpriteAnimator | None:
-        """Get sprite animator instance (creates a new one per enemy for animation independence)."""
-        if WaveManager._sprite_animator is None:
-            return None
+    def get_sprite_animators() -> tuple[SpriteAnimator | None, SpriteAnimator | None]:
+        """Get enemy sprite animators, creating independent instances for each enemy."""
+        if WaveManager._sprite_animator_right is None and WaveManager._sprite_animator_left is None:
+            return None, None
         
-        # Return a new animator instance with same config
         try:
-            animator = SpriteAnimator(
-                sprite_sheet_path=WaveManager._sprite_animator.sprite_sheet_path,
-                frame_width=WaveManager._sprite_animator.frame_width,
-                frame_height=WaveManager._sprite_animator.frame_height,
-                frames_per_row=WaveManager._sprite_animator.frames_per_row,
-                animations=WaveManager._sprite_animator.animations,
-            )
-            return animator
+            right_animator = None
+            left_animator = None
+
+            if WaveManager._sprite_animator_right is not None:
+                right_animator = SpriteAnimator(
+                    sprite_sheet_path=WaveManager._sprite_animator_right.sprite_sheet_path,
+                    frame_width=WaveManager._sprite_animator_right.frame_width,
+                    frame_height=WaveManager._sprite_animator_right.frame_height,
+                    frames_per_row=WaveManager._sprite_animator_right.frames_per_row,
+                    animations=WaveManager._sprite_animator_right.animations,
+                )
+            if WaveManager._sprite_animator_left is not None:
+                left_animator = SpriteAnimator(
+                    sprite_sheet_path=WaveManager._sprite_animator_left.sprite_sheet_path,
+                    frame_width=WaveManager._sprite_animator_left.frame_width,
+                    frame_height=WaveManager._sprite_animator_left.frame_height,
+                    frames_per_row=WaveManager._sprite_animator_left.frames_per_row,
+                    animations=WaveManager._sprite_animator_left.animations,
+                )
+
+            return right_animator, left_animator
         except Exception as e:
-            print(f"[WaveManager] Failed to create animator: {e}")
-            return None
+            print(f"[WaveManager] Failed to create animators: {e}")
+            return None, None
 
     @property
     def cfg(self) -> WaveConfig:
@@ -151,23 +192,23 @@ class WaveManager:
         pos = self._spawn_point()
         
         # Get sprite animator if available (safe to pass None)
-        animator = WaveManager.get_sprite_animator()
+        animator_right, animator_left = WaveManager.get_sprite_animators()
 
         if is_boss:
             e = Enemy(pos, cfg.enemy_hp, cfg.enemy_hp, cfg.enemy_speed,
                      cfg.enemy_size, cfg.enemy_color,
                      is_boss=True, contact_damage=2, knockback_resistance=4.0,
-                     sprite_animator=animator)
+                     sprite_animator=animator_right, sprite_animator_left=animator_left)
         elif is_minion:
             e = Enemy(pos, BOSS_MINION_HP, BOSS_MINION_HP, BOSS_MINION_SPEED,
                      BOSS_MINION_SIZE, BOSS_MINION_COLOR,
                      is_boss=False, contact_damage=1, knockback_resistance=1.0,
-                     sprite_animator=animator)
+                     sprite_animator=animator_right, sprite_animator_left=animator_left)
         else:
             e = Enemy(pos, cfg.enemy_hp, cfg.enemy_hp, cfg.enemy_speed,
                      cfg.enemy_size, cfg.enemy_color,
                      is_boss=False, contact_damage=1, knockback_resistance=1.0,
-                     sprite_animator=animator)
+                     sprite_animator=animator_right, sprite_animator_left=animator_left)
 
         self.enemies.append(e)
 
