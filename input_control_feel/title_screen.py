@@ -391,7 +391,7 @@ class TitleScreen:
 
 
         # distant skyline silhouette — just dark blocks of varying heights
-        skyline_y = int(self.h * 0.58)
+        skyline_y = int(self.h * 0.70)
         for bx in range(0, self.w, 64):
             bh = 20 + int(abs(math.sin(bx * 0.07)) * 30) + ((bx // 32) % 3) * 6
             pygame.draw.rect(surf, (14, 10, 18), (bx, skyline_y - bh, 48, bh))
