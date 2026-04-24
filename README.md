@@ -27,10 +27,10 @@ The project is built using a modular Python architecture, with separate systems 
 ## Setup
 1. Make sure Python is installed on your device
 2. Install dependencies
-- pip install pygame
+    - pip install pygame
 2. Clone the repo
-- git clone https://github.com/quinnh4/COMP312OSProject
-- cd OMP312OSProject
+    - git clone https://github.com/quinnh4/COMP312OSProject
+    - cd OMP312OSProject
 3. python main.py
 
 ## Technologies Used
