@@ -30,7 +30,7 @@ The project is built using a modular Python architecture, with separate systems 
     - pip install pygame
 2. Clone the repo
     - git clone https://github.com/quinnh4/COMP312OSProject
-    - cd OMP312OSProject
+    - cd COMP312OSProject
 3. python main.py
 
 ## Technologies Used
