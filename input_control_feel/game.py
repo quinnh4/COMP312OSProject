@@ -133,8 +133,13 @@ class Game:
         self.damage_cooldown_left = 0.0
         self.death_anim_timer = 0.0
 
+        self.shake_timer = 0.0
+        self.red_flash_timer = 0.0
+        self.victory_fade_timer = 0.0
+
         self.control_scheme = ControlScheme.WASD
         self.debug = False
+        self.invincible = False   # dev toggle — press I in-game
 
         self.presets = [
             FeelPreset("BALANCED",     2500.0, 480.0, 10.0, 950.0,  0.25, 8,  2.0),
@@ -195,7 +200,7 @@ class Game:
 
     def _ensure_player_not_in_obstacle(self) -> None:
         # if the player's spawn overlaps an obstacle, nudge them to a safe spot
-        if not any(self.player_rect.colliderect(o.rect) for o in self.obstacles):
+        if not any(self.player_rect.colliderect(o.hit_rect) for o in self.obstacles):
             return
 
         import math
@@ -208,7 +213,7 @@ class Game:
                                int(cy + radius * math.sin(a)))
                 if not self.playfield.contains(test):
                     continue
-                if any(test.colliderect(o.rect) for o in self.obstacles):
+                if any(test.colliderect(o.hit_rect) for o in self.obstacles):
                     continue
                 self.player_rect = test
                 self.player_pos.update(self.player_rect.center)
@@ -316,6 +321,11 @@ class Game:
 
         if event.key == pygame.K_F1:
             self.debug = not self.debug
+            return
+
+        if event.key == pygame.K_i:
+            self.invincible = not self.invincible
+            print(f"[dev] invincible={'ON' if self.invincible else 'OFF'}")
             return
 
         if event.key == pygame.K_c:
@@ -475,6 +485,8 @@ class Game:
 
         # death animation phase before game-over screen
         if self.state == "dying":
+            self.shake_timer = max(0.0, self.shake_timer - dt)
+            self.red_flash_timer = max(0.0, self.red_flash_timer - dt)
             self.player_sprite_animator.set_animation("death")
             self.player_sprite_animator.update(dt)
             self.death_anim_timer = max(0.0, self.death_anim_timer - dt)
@@ -484,7 +496,12 @@ class Game:
 
         # pause + game over + victory: no simulation
         if self.state != "play":
+            if self.state == "victory":
+                self.victory_fade_timer = min(2.0, self.victory_fade_timer + dt)
             return
+
+        self.shake_timer = max(0.0, self.shake_timer - dt)
+        self.red_flash_timer = max(0.0, self.red_flash_timer - dt)
 
         if self.damage_cooldown_left > 0:
             self.damage_cooldown_left = max(0.0, self.damage_cooldown_left - dt)
@@ -599,13 +616,12 @@ class Game:
             self.player_sprite_animator.set_animation("death")
             self.player_sprite_animator.update(dt)
 
-        # enemy contact damage (shield absorbs first)
+        # enemy contact damage (shield absorbs first) — skipped when invincible
         hit_rect = self.player_rect
-        if self.damage_cooldown_left <= 0:
+        if not self.invincible and self.damage_cooldown_left <= 0:
             for enemy in self.wave_manager.enemies:
                 if enemy.alive and enemy.rect.colliderect(hit_rect):
                     if self.powerup_manager.absorb_shield_hit():
-                        # shield ate the hit — still apply i-frames so we don't drain all stacks in one overlap
                         self.damage_cooldown_left = self.DAMAGE_COOLDOWN
                         break
 
@@ -613,63 +629,176 @@ class Game:
                         damage = 10.0
                     else:
                         wave_num = self.wave_manager.wave_number
-                        wave_scaling = 1.5 * (wave_num - 1)
+                        wave_scaling = 1.0 + 0.5 * (wave_num - 1)
                         damage = enemy.contact_damage * wave_scaling
                     self.player_hp -= damage
                     self.damage_cooldown_left = self.DAMAGE_COOLDOWN
                     if self.player_hp <= 0:
                         self.player_hp = 0
+                        self.shake_timer = 0.4
+                        self.red_flash_timer = 0.5
                         self.death_anim_timer = self.DEATH_ANIM_DURATION
                         self.state = "dying"
                     break
 
+    # ------------------------------------------------------------------ HUD
+
     def _draw_health_bar(self) -> None:
-        bar_x = 14
-        bar_y = 4
-        bar_w = 200
-        bar_h = 10
+        bar_x = 36
+        bar_y = 8
+        bar_w = 160
+        bar_h = 12
 
         hp_ratio = max(0, self.player_hp / self.PLAYER_MAX_HP)
 
-        pygame.draw.rect(self.screen, (40, 10, 10), (bar_x, bar_y, bar_w, bar_h), border_radius=3)
+        # trough
+        pygame.draw.rect(self.screen, (28, 6, 6), (bar_x, bar_y, bar_w, bar_h), border_radius=2)
+        # fill — blood red always; darkens as HP falls
         fill_w = int(bar_w * hp_ratio)
-        if hp_ratio > 0.6:
-            bar_color = (80, 200, 80)
-        elif hp_ratio > 0.3:
-            bar_color = (220, 180, 40)
+        if hp_ratio > 0.5:
+            bar_color = (180, 20, 20)
+        elif hp_ratio > 0.25:
+            bar_color = (160, 10, 10)
         else:
-            bar_color = (220, 50, 50)
+            bar_color = (220, 0, 0)   # bright warning red near death
         if fill_w > 0:
-            pygame.draw.rect(self.screen, bar_color, (bar_x, bar_y, fill_w, bar_h), border_radius=3)
-        pygame.draw.rect(self.screen, (180, 180, 180), (bar_x, bar_y, bar_w, bar_h), width=1, border_radius=3)
+            pygame.draw.rect(self.screen, bar_color, (bar_x, bar_y, fill_w, bar_h), border_radius=2)
+        # engraved border
+        pygame.draw.rect(self.screen, (90, 30, 30), (bar_x, bar_y, bar_w, bar_h), width=1, border_radius=2)
+
+        # LIFE label to the left of the bar
+        life_lbl = self.small_font.render("LIFE", True, (160, 30, 30))
+        self.screen.blit(life_lbl, (bar_x - life_lbl.get_width() - 4, bar_y))
+
+        # numeric label below bar
         display_hp = max(0.0, float(self.player_hp))
-        hp_label = self.font.render(f"HP {display_hp:.1f}/{self.PLAYER_MAX_HP}", True, (216, 222, 233))
-        self.screen.blit(hp_label, (bar_x + bar_w + 8, bar_y - 2))
+        hp_label = self.small_font.render(f"{display_hp:.0f} / {self.PLAYER_MAX_HP}", True, (140, 100, 100))
+        self.screen.blit(hp_label, (bar_x, bar_y + bar_h + 2))
+
+    def _draw_bullet_pips(self, x: int, y: int) -> None:
+        """Draw individual bullet pips instead of a numeric ammo count."""
+        cap = self.preset.ammo_max
+        current = self.ammo_current
+        pip_w, pip_h, gap = 6, 12, 3
+        total_w = cap * (pip_w + gap) - gap
+        cx = x - total_w  # right-align from x
+        for i in range(cap):
+            color = (200, 180, 60) if i < current else (50, 40, 20)
+            rect = pygame.Rect(cx + i * (pip_w + gap), y, pip_w, pip_h)
+            pygame.draw.rect(self.screen, color, rect, border_radius=1)
+            pygame.draw.rect(self.screen, (80, 70, 30), rect, width=1, border_radius=1)
+
+    def _draw_boss_bar(self) -> None:
+        """A prominent boss HP bar drawn at the bottom of the screen."""
+        wm = self.wave_manager
+        if not wm.cfg.is_boss_wave:
+            return
+        boss = wm.boss_enemy
+        if boss is None or not boss.alive:
+            return
+
+        bar_h = 14
+        bar_w = self.SCREEN_W - 120
+        bar_x = 60
+        bar_y = self.SCREEN_H - bar_h - 8
+
+        ratio = max(0.0, boss.hp / boss.max_hp)
+
+        # background
+        pygame.draw.rect(self.screen, (20, 4, 28), (bar_x - 2, bar_y - 2, bar_w + 4, bar_h + 4), border_radius=3)
+        # trough
+        pygame.draw.rect(self.screen, (30, 8, 40), (bar_x, bar_y, bar_w, bar_h), border_radius=2)
+        # fill — deep purple that shifts redder at low HP
+        fill_w = int(bar_w * ratio)
+        if ratio > 0.5:
+            boss_color = (120, 20, 160)
+        elif ratio > 0.25:
+            boss_color = (160, 10, 100)
+        else:
+            boss_color = (200, 10, 30)
+        if fill_w > 0:
+            pygame.draw.rect(self.screen, boss_color, (bar_x, bar_y, fill_w, bar_h), border_radius=2)
+        # border
+        pygame.draw.rect(self.screen, (180, 60, 220), (bar_x, bar_y, bar_w, bar_h), width=1, border_radius=2)
+
+        # phase dots — show which minion phases have triggered
+        phase = wm.boss_phase
+        for i, threshold in enumerate([0.75, 0.25]):
+            dot_x = bar_x + int(bar_w * threshold)
+            color = (80, 80, 80) if phase <= i else (220, 60, 60)
+            pygame.draw.line(self.screen, color, (dot_x, bar_y - 3), (dot_x, bar_y + bar_h + 3), 1)
+
+        # label centred above bar
+        label = self.font.render("ZOMBIUS MAXIMUS XI", True, (200, 80, 220))
+        self.screen.blit(label, (self.SCREEN_W // 2 - label.get_width() // 2, bar_y - 18))
 
     def _draw_hud(self) -> None:
-        pygame.draw.rect(self.screen, (46, 52, 64), pygame.Rect(0, 0, self.SCREEN_W, self.HUD_H))
+        # --- stone slab background ---
+        pygame.draw.rect(self.screen, (22, 18, 16), pygame.Rect(0, 0, self.SCREEN_W, self.HUD_H))
+        # top engraved highlight
+        pygame.draw.line(self.screen, (50, 42, 38), (0, 0), (self.SCREEN_W, 0))
+        # bottom border — looks like a stone ledge
+        pygame.draw.rect(self.screen, (10, 8, 6), pygame.Rect(0, self.HUD_H - 3, self.SCREEN_W, 3))
+        pygame.draw.rect(self.screen, (60, 40, 30), pygame.Rect(0, self.HUD_H - 4, self.SCREEN_W, 1))
 
+        # --- LIFE bar (left) ---
         self._draw_health_bar()
 
-        # active power-up effects shown just right of the HP bar
-        self.powerup_manager.draw_hud_effects(self.screen, self.small_font, 340, 4)
+        # --- active power-up icons ---
+        self.powerup_manager.draw_hud_effects(self.screen, self.small_font, 220, 6)
 
-        left = (
-            f"Scheme: {self.control_scheme.value}   "
-            f"Weapon: {self.preset.name}   "
-            f"Wave: {self.wave_manager.wave_number}/{self.wave_manager.total_waves}"
-        )
+        # --- NIGHT label (centre) ---
+        roman = ["I", "II", "III", "IV", "V"]
+        wave_num = self.wave_manager.wave_number
+        total = self.wave_manager.total_waves
+        wave_roman = roman[wave_num - 1] if wave_num <= len(roman) else str(wave_num)
+        total_roman = roman[total - 1] if total <= len(roman) else str(total)
+        is_boss = self.wave_manager.cfg.is_boss_wave
+        night_color = (180, 60, 220) if is_boss else (140, 160, 120)
+        night_surf = self.font.render(f"NIGHT  {wave_roman} / {total_roman}", True, night_color)
+        self.screen.blit(night_surf, (self.SCREEN_W // 2 - night_surf.get_width() // 2, 6))
 
+        # --- enemies remaining (below night label) ---
+        wm = self.wave_manager
+        alive_count = len(wm.enemies)
+        pending = wm.spawn_queue + wm.minion_queue
+        remaining = alive_count + pending
+        remain_color = (160, 60, 60) if remaining > 0 else (60, 120, 60)
+        remain_surf = self.small_font.render(
+            f"{remaining} remaining", True, remain_color)
+        self.screen.blit(remain_surf, (self.SCREEN_W // 2 - remain_surf.get_width() // 2, 28))
+
+        # --- bullet pips (top-right) ---
+        pip_y = 8
+        self._draw_bullet_pips(self.SCREEN_W - 14, pip_y)
+        ammo_label = self.small_font.render("AMMO", True, (80, 80, 60))
+        self.screen.blit(ammo_label, (self.SCREEN_W - ammo_label.get_width() - 14, pip_y + 14))
+
+        # --- reload progress bar (replaces ammo pips while reloading) ---
         if self.is_reloading:
-            right = f"RELOADING {self.reload_cooldown_left: .1f}s"
-        else:
-            right = f"Ammo: {self.ammo_current}/{self.preset.ammo_max}"
+            prog = max(0.0, 1.0 - self.reload_cooldown_left / self.preset.reload_time)
+            bar_w = self.preset.ammo_max * (6 + 3) - 3   # match pip row width
+            bar_x = self.SCREEN_W - 14 - bar_w
+            pygame.draw.rect(self.screen, (40, 30, 10), (bar_x, pip_y, bar_w, 12), border_radius=2)
+            pygame.draw.rect(self.screen, (180, 140, 40),
+                             (bar_x, pip_y, int(bar_w * prog), 12), border_radius=2)
+            pygame.draw.rect(self.screen, (100, 80, 20), (bar_x, pip_y, bar_w, 12), width=1, border_radius=2)
+            rl_label = self.small_font.render("RELOADING", True, (180, 140, 40))
+            self.screen.blit(rl_label, (self.SCREEN_W - rl_label.get_width() - 14, pip_y + 14))
 
-        left_surf = self.font.render(left, True, (216, 222, 233))
-        right_surf = self.font.render(right, True, (216, 222, 233))
+        # --- skull kill counter ---
+        kills_surf = self.small_font.render(
+            f"KILLS  {self.wave_manager.total_kills}", True, (100, 80, 80))
+        self.screen.blit(kills_surf, (self.SCREEN_W - kills_surf.get_width() - 14, 40))
 
-        self.screen.blit(left_surf, (14, 20))
-        self.screen.blit(right_surf, (self.SCREEN_W - right_surf.get_width() - 14, 20))
+        # --- active power-up icons (left of centre) ---
+        self.powerup_manager.draw_hud_effects(self.screen, self.small_font, 220, 6)
+
+        # --- invincible dev badge ---
+        if self.invincible:
+            inv_surf = self.font.render("[ INVINCIBLE ]", True, (60, 220, 100))
+            self.screen.blit(inv_surf, (self.SCREEN_W * 3 // 4 - inv_surf.get_width() // 2, 8))
+
 
     def _draw_debug(self) -> None:
         p = self.preset
@@ -827,22 +956,38 @@ class Game:
         # shield ring on top of player
         self.powerup_manager.draw_shield_ring(self.screen, self.player_rect.center)
 
+        self._draw_boss_bar()
         self._draw_hud()
         self._draw_pickup_toast()
 
         if self.debug:
             self._draw_debug()
 
-        if self.wave_manager.wave_complete and not self.wave_manager.all_waves_done:
-            if self.wave_manager.wave_number == 4:
-                msg1 = f"Wave {self.wave_manager.wave_number} Clear! +3 Max Ammo! +25% Power!"
-            else:
-                msg1 = f"Wave {self.wave_manager.wave_number} Clear! +3 Max Ammo!"
+        if self.red_flash_timer > 0:
+            flash = pygame.Surface((self.SCREEN_W, self.SCREEN_H), pygame.SRCALPHA)
+            alpha = int(255 * min(1.0, self.red_flash_timer / 0.5))
+            flash.fill((200, 0, 0, alpha))
+            self.screen.blit(flash, (0, 0))
 
-            self._draw_center_message(
-                msg1,
-                f"Next wave in {self.wave_manager.transition_timer:.1f}s...",
-            )
+        if self.state == "victory":
+            fade = pygame.Surface((self.SCREEN_W, self.SCREEN_H), pygame.SRCALPHA)
+            alpha = int(200 * min(1.0, self.victory_fade_timer / 2.0))
+            fade.fill((200, 160, 40, alpha))
+            self.screen.blit(fade, (0, 0))
+
+        if self.wave_manager.wave_complete and not self.wave_manager.all_waves_done:
+            if self.wave_manager.wave_number >= self.wave_manager.total_waves:
+                self._draw_center_message("Boss Killed!", "")
+            else:
+                if self.wave_manager.wave_number == 4:
+                    msg1 = f"Wave {self.wave_manager.wave_number} Clear! +3 Max Ammo! +25% Power!"
+                else:
+                    msg1 = f"Wave {self.wave_manager.wave_number} Clear! +3 Max Ammo!"
+
+                self._draw_center_message(
+                    msg1,
+                    f"Next wave in {self.wave_manager.transition_timer:.1f}s...",
+                )
 
         if self.state == "victory":
             self._draw_center_message("YOU WIN!", f"Kills: {self.wave_manager.total_kills}   ENTER to restart")
@@ -854,9 +999,17 @@ class Game:
         if self.state == "title":
             self.title_screen.draw(self.screen)
             return
-
-        # always draw the gameplay scene first
-        self._draw_gameplay()
+        # shudder effect when the player dies
+        if self.shake_timer > 0:
+            import random
+            offset_x = random.randint(-12, 12)
+            offset_y = random.randint(-12, 12)
+            self._draw_gameplay()
+            copy_surf = self.screen.copy()
+            self.screen.fill((0, 0, 0))
+            self.screen.blit(copy_surf, (offset_x, offset_y))
+        else:
+            self._draw_gameplay()
 
         # overlay the pause menu on top
         if self.state == "paused":

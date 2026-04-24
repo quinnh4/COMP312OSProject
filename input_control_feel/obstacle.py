@@ -19,14 +19,41 @@ _SPRITE_PATHS = [
     "input_control_feel/sprites/tombstones/tombstone3.png",
 ]
 
+# tight pixel bounds for each sprite as (left_frac, top_frac, right_frac, bot_frac)
+# where each value is a fraction of the full image size (0.0–1.0).
+# computed once in _load_tombstone_sprites and used by Obstacle.hit_rect.
+_SPRITE_TIGHT_FRACS: list[tuple[float, float, float, float]] = []
+
+
+def _compute_tight_fracs(img: pygame.Surface) -> tuple[float, float, float, float]:
+    """
+    Returns (left, top, right, bottom) as fractions of image size for
+    the bounding box of all pixels with alpha > 10.
+    """
+    w, h = img.get_size()
+    min_x, min_y = w, h
+    max_x, max_y = 0, 0
+    for y in range(h):
+        for x in range(w):
+            if img.get_at((x, y))[3] > 10:
+                if x < min_x: min_x = x
+                if x > max_x: max_x = x
+                if y < min_y: min_y = y
+                if y > max_y: max_y = y
+
+    if max_x < min_x:
+        return (0.0, 0.0, 1.0, 1.0)
+    return (min_x / w, min_y / h, (max_x + 1) / w, (max_y + 1) / h)
+
 
 def _load_tombstone_sprites() -> list[pygame.Surface]:
     # try to load all three tombstone sprites once and cache them.
-    global _TOMBSTONE_SPRITES
+    global _TOMBSTONE_SPRITES, _SPRITE_TIGHT_FRACS
     if _TOMBSTONE_SPRITES is not None:
         return _TOMBSTONE_SPRITES
 
     sprites: list[pygame.Surface] = []
+    _SPRITE_TIGHT_FRACS = []
     for path in _SPRITE_PATHS:
         if os.path.exists(path):
             try:
@@ -37,7 +64,10 @@ def _load_tombstone_sprites() -> list[pygame.Surface]:
                         r, g, b, _ = img.get_at((x, y))
                         if r < 20 and g < 20 and b < 20:
                             img.set_at((x, y), (0, 0, 0, 0))
+                fracs = _compute_tight_fracs(img)
                 sprites.append(img)
+                _SPRITE_TIGHT_FRACS.append(fracs)
+                print(f"[obstacle] Loaded {path}, tight fracs={fracs}")
             except Exception as e:
                 print(f"[obstacle] Failed to load {path}: {e}")
         else:
@@ -69,6 +99,25 @@ class Obstacle:
     rect: pygame.Rect
     # which of the loaded tombstone sprites to render with
     sprite_idx: int = 0
+
+    @property
+    def hit_rect(self) -> pygame.Rect:
+        """
+        Tight collision rect matching only the visible (non-transparent)
+        pixels of the sprite and scaled to this obstacle's draw rect.
+        """
+        _load_tombstone_sprites()  # ensure fracs are computed
+        if _SPRITE_TIGHT_FRACS:
+            idx = self.sprite_idx % len(_SPRITE_TIGHT_FRACS)
+            lf, tf, rf, bf = _SPRITE_TIGHT_FRACS[idx]
+        else:
+            lf, tf, rf, bf = 0.0, 0.0, 1.0, 1.0  # fallback: full rect
+        w, h = self.rect.width, self.rect.height
+        left   = self.rect.left + int(lf * w)
+        top    = self.rect.top  + int(tf * h)
+        right  = self.rect.left + int(rf * w)
+        bottom = self.rect.top  + int(bf * h)
+        return pygame.Rect(left, top, right - left, bottom - top)
 
     def draw(self, screen: pygame.Surface) -> None:
         sprite = _get_scaled_sprite(self.sprite_idx, self.rect.width, self.rect.height)
@@ -219,7 +268,7 @@ def _layout_scattered(rng: random.Random, pf: pygame.Rect, count: int) -> list[p
     placed: list[pygame.Rect] = []
     safe = _spawn_safe_zone(pf)
     for _ in range(count):
-        r = _try_place_spread(rng, pf, placed, safe, (44, 70), count)
+        r = _try_place_spread(rng, pf, placed, safe, (66, 105), count)
         if r:
             placed.append(r)
     return placed
@@ -239,7 +288,7 @@ def _layout_rows(rng: random.Random, pf: pygame.Rect, count: int) -> list[pygame
             x_rel = (ci + 0.5) / per_row
             x = pf.left + int(pf.width * x_rel) + rng.randint(-20, 20)
             y = row_y + rng.randint(-15, 15)
-            size = rng.randint(48, 64)
+            size = rng.randint(72, 96)
             r = _rect_around(x, y, size, size)
             if _fits(r, placed, safe, pf):
                 placed.append(r)
@@ -270,7 +319,7 @@ def _layout_clusters(rng: random.Random, pf: pygame.Rect, count: int) -> list[py
         for _ in range(per_cluster):
             # try a few positions near the cluster center
             for _ in range(8):
-                size = rng.randint(40, 58)
+                size = rng.randint(60, 87)
                 x = center_x + rng.randint(-40, 40)
                 y = center_y + rng.randint(-30, 30)
                 r = _rect_around(x, y, size, size)
@@ -291,7 +340,7 @@ def _layout_perimeter(rng: random.Random, pf: pygame.Rect, count: int) -> list[p
         if len(placed) >= count:
             break
         for _ in range(8):
-            r = _rand_rect_in_cell(rng, pf, col, row, (44, 64))
+            r = _rand_rect_in_cell(rng, pf, col, row, (66, 96))
             if _fits(r, placed, safe, pf):
                 placed.append(r)
                 break
@@ -307,7 +356,7 @@ def _layout_boss_arena(rng: random.Random, pf: pygame.Rect, count: int) -> list[
     for rel_x, rel_y in positions:
         jitter_x = rng.randint(-18, 18)
         jitter_y = rng.randint(-14, 14)
-        size = rng.randint(56, 72)
+        size = rng.randint(84, 108)
         cx = pf.left + int(pf.width * rel_x) + jitter_x
         cy = pf.top + int(pf.height * rel_y) + jitter_y
         r = _rect_around(cx, cy, size, size)
@@ -317,7 +366,7 @@ def _layout_boss_arena(rng: random.Random, pf: pygame.Rect, count: int) -> list[
     # sometimes add an off-center stone to really split the arena
     if rng.random() < 0.5 and len(placed) < count:
         side = rng.choice([-1, 1])
-        size = rng.randint(48, 60)
+        size = rng.randint(72, 90)
         r = _rect_around(pf.centerx + side * (_SPAWN_CLEARANCE + rng.randint(10, 40)),
                          pf.centery + rng.randint(-30, 30),
                          size, size)
@@ -373,7 +422,7 @@ def _top_up_to_minimum(rng: random.Random, pf: pygame.Rect,
     safe = _spawn_safe_zone(pf)
     attempts = 0
     while len(placed) < max(_MIN_OBSTACLES, count_target) and attempts < 300:
-        r = _try_place_spread(rng, pf, placed, safe, (44, 60), count_target)
+        r = _try_place_spread(rng, pf, placed, safe, (66, 90), count_target)
         if r:
             placed.append(r)
         attempts += 1
@@ -415,28 +464,30 @@ def resolve_rect_collision(rect: pygame.Rect, obstacles: list[Obstacle],
     test_x = prev_rect.copy()
     test_x.x = new_rect.x
     for ob in obstacles:
-        if test_x.colliderect(ob.rect):
+        hr = ob.hit_rect
+        if test_x.colliderect(hr):
             if new_rect.x > prev_rect.x:
-                test_x.right = ob.rect.left
+                test_x.right = hr.left
             elif new_rect.x < prev_rect.x:
-                test_x.left = ob.rect.right
+                test_x.left = hr.right
 
     # resolve Y axis using x-resolved rect
     test_y = test_x.copy()
     test_y.y = new_rect.y
     for ob in obstacles:
-        if test_y.colliderect(ob.rect):
+        hr = ob.hit_rect
+        if test_y.colliderect(hr):
             if new_rect.y > prev_rect.y:
-                test_y.bottom = ob.rect.top
+                test_y.bottom = hr.top
             elif new_rect.y < prev_rect.y:
-                test_y.top = ob.rect.bottom
+                test_y.top = hr.bottom
 
     return test_y
 
 
 def projectile_hits_obstacle(point: pygame.Vector2, obstacles: list[Obstacle]) -> bool:
     for ob in obstacles:
-        if ob.rect.collidepoint(point.x, point.y):
+        if ob.hit_rect.collidepoint(point.x, point.y):
             return True
     return False
 

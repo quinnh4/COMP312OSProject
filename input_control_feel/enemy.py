@@ -73,11 +73,12 @@ class Enemy:
             test_rect = pygame.Rect(0, 0, self.size, self.size)
             test_rect.center = (int(self.position.x), int(prev_pos.y))
             for ob in obstacles:
-                if test_rect.colliderect(ob.rect):
+                hr = ob.hit_rect
+                if test_rect.colliderect(hr):
                     if self.position.x > prev_pos.x:
-                        test_rect.right = ob.rect.left
+                        test_rect.right = hr.left
                     elif self.position.x < prev_pos.x:
-                        test_rect.left = ob.rect.right
+                        test_rect.left = hr.right
                     self.position.x = test_rect.centerx
                     self.velocity.x = 0
 
@@ -85,11 +86,12 @@ class Enemy:
             test_rect = pygame.Rect(0, 0, self.size, self.size)
             test_rect.center = (int(self.position.x), int(self.position.y))
             for ob in obstacles:
-                if test_rect.colliderect(ob.rect):
+                hr = ob.hit_rect
+                if test_rect.colliderect(hr):
                     if self.position.y > prev_pos.y:
-                        test_rect.bottom = ob.rect.top
+                        test_rect.bottom = hr.top
                     elif self.position.y < prev_pos.y:
-                        test_rect.top = ob.rect.bottom
+                        test_rect.top = hr.bottom
                     self.position.y = test_rect.centery
                     self.velocity.y = 0
 
@@ -155,7 +157,4 @@ class Enemy:
         pygame.draw.rect(screen, (60, 0, 0), (r.left, bar_y, self.size, bar_h))
         fill_w = int(self.size * (self.hp / self.max_hp))
         pygame.draw.rect(screen, (220, 50, 50), (r.left, bar_y, fill_w, bar_h))
-
-        if self.is_boss:
-            lbl = font.render("BOSS", True, (255, 30, 200))
-            screen.blit(lbl, (r.centerx - lbl.get_width() // 2, bar_y - 18))
+

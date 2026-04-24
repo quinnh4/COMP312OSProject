@@ -30,12 +30,18 @@ WAVE_CONFIGS: list[WaveConfig] = [
 ]
 
 
-BOSS_MINION_COUNT     = 6
-BOSS_MINION_HP        = 3
-BOSS_MINION_SPEED     = 85.0
-BOSS_MINION_SIZE      = 32
-BOSS_MINION_COLOR     = (130, 40, 170)
-WAVE_TRANSITION_DELAY = 3.0
+BOSS_MINION_COUNT        = 6
+BOSS_MINION_HP           = 3
+BOSS_MINION_SPEED        = 85.0
+BOSS_MINION_SIZE         = 32
+BOSS_MINION_COLOR        = (130, 40, 170)
+WAVE_TRANSITION_DELAY    = 3.0
+
+# extra minion waves triggered by boss HP thresholds
+BOSS_PHASE2_MINION_COUNT = 6
+BOSS_PHASE3_MINION_COUNT = 5
+BOSS_PHASE2_HP_RATIO     = 0.75   # trigger when boss HP drops to ≤75 %
+BOSS_PHASE3_HP_RATIO     = 0.25   # trigger when boss HP drops to ≤25 %
 
 
 class WaveManager:
@@ -56,6 +62,9 @@ class WaveManager:
         self.all_waves_done = False
         # obstacles for the current wave (set by Game)
         self.obstacles: list[Obstacle] = []
+        # boss fight wave tracking
+        self.boss_enemy: Enemy | None = None
+        self.boss_phase: int = 0   # 0=initial  1=wave2 sent  2=wave3 sent
         
         # Try to load sprite animator
         WaveManager._load_sprite_animator()
@@ -151,7 +160,8 @@ class WaveManager:
 
     @property
     def cfg(self) -> WaveConfig:
-        return WAVE_CONFIGS[self.current_wave_idx]
+        idx = min(self.current_wave_idx, len(WAVE_CONFIGS) - 1)
+        return WAVE_CONFIGS[idx]
 
     @property
     def wave_number(self) -> int:
@@ -168,10 +178,14 @@ class WaveManager:
         self.wave_complete = False
 
         if self.cfg.is_boss_wave:
+            self.boss_phase = 0
+            self.boss_enemy = None
             self._spawn(is_boss=True)
             self.spawn_queue = 0
             self.minion_queue = BOSS_MINION_COUNT
         else:
+            self.boss_phase = 0
+            self.boss_enemy = None
             self.minion_queue = 0
 
     def _spawn_point(self) -> pygame.Vector2:
@@ -198,6 +212,7 @@ class WaveManager:
                      cfg.enemy_size, cfg.enemy_color,
                      is_boss=True, contact_damage=2, knockback_resistance=4.0,
                      sprite_animator=animator_right, sprite_animator_left=animator_left)
+            self.boss_enemy = e
         elif is_minion:
             e = Enemy(pos, BOSS_MINION_HP, BOSS_MINION_HP, BOSS_MINION_SPEED,
                      BOSS_MINION_SIZE, BOSS_MINION_COLOR,
@@ -242,6 +257,28 @@ class WaveManager:
                 if on_enemy_killed is not None:
                     on_enemy_killed(e)
         self.enemies = survivors
+
+        # check HP thresholds and queue extra mini zombies
+        if self.cfg.is_boss_wave and self.boss_enemy and self.boss_enemy.alive:
+            hp_ratio = self.boss_enemy.hp / self.boss_enemy.max_hp
+            non_boss_alive = sum(1 for e in self.enemies if not e.is_boss)
+
+            # initial minions cleared and boss HP lower than 75%
+            if (self.boss_phase == 0
+                    and self.minion_queue == 0
+                    and non_boss_alive == 0
+                    and hp_ratio <= BOSS_PHASE2_HP_RATIO):
+                self.boss_phase = 1
+                self.minion_queue += BOSS_PHASE2_MINION_COUNT
+                self.spawn_timer = 0.0
+                print("Wave 2! 6 mini zombies incoming!")
+
+            # boss HP lower than 25%
+            elif self.boss_phase == 1 and hp_ratio <= BOSS_PHASE3_HP_RATIO:
+                self.boss_phase = 2
+                self.minion_queue += BOSS_PHASE3_MINION_COUNT
+                self.spawn_timer = 0.0
+                print("Wave 3! 5 mini zombies incoming!")
 
         # Check wave clear
         all_spawned = self.spawn_queue == 0 and self.minion_queue == 0
