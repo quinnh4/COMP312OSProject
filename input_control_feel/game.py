@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import random
+
 from input_control_feel.wave_manager import WaveManager
 from input_control_feel.powerup import PowerUpManager
 from input_control_feel.obstacle import (
@@ -11,12 +13,6 @@ from input_control_feel.title_screen import TitleScreen, PauseMenu
 from input_control_feel.sprite_manager import PlayerSpriteAnimator, PlayerDirection
 
 import pygame
-
-
-class BoundaryMode(str, Enum):
-    CLAMP = "clamp"
-    WRAP = "wrap"
-    BOUNCE = "bounce"
 
 
 class ControlScheme(str, Enum):
@@ -44,14 +40,10 @@ class Projectile:
 class FeelPreset:
     name: str
 
-    # Top-down feel
+    # movement feel
     accel: float
     max_speed: float
     friction: float
-
-    # Platformer feel
-    gravity: float
-    jump_speed: float
 
     # shooting feel
     projectile_speed: float
@@ -73,9 +65,6 @@ class Game:
     DEATH_ANIM_DURATION = 0.6
 
     PLAYER_SIZE = 32
-
-    DASH_IMPULSE = 760.0
-    DASH_COOLDOWN = 0.65
 
     @staticmethod
     def _approach_zero(value: float, decel: float, dt: float) -> float:
@@ -108,7 +97,7 @@ class Game:
                 self._apply_bounds_player()
                 self._ensure_player_not_in_obstacle()
 
-        # Rebuild menus so button hitboxes and background elements match the new size.
+        # rebuild menus so button hitboxes match the new size
         if hasattr(self, "title_font") and hasattr(self, "button_font") and hasattr(self, "small_font"):
             self.title_screen = TitleScreen(
                 self.SCREEN_W, self.SCREEN_H,
@@ -130,8 +119,6 @@ class Game:
         self.button_font = pygame.font.SysFont("couriernew,consolas,monospace", 22, bold=True)
         self._apply_window_size(self.SCREEN_W, self.SCREEN_H, recreate_surface=False)
 
-        self.boundary_mode = BoundaryMode.CLAMP
-        self.platformer_mode = False
         # states: "title", "play", "dying", "paused", "game_over", "victory"
         self.state = "title"
         # main loop watches this to know when a quit button was clicked
@@ -146,23 +133,19 @@ class Game:
         self.damage_cooldown_left = 0.0
         self.death_anim_timer = 0.0
 
-        self.on_ground = True
-        self.jump_requested = False
-
         self.control_scheme = ControlScheme.WASD
         self.debug = False
 
         self.presets = [
-            FeelPreset("BALANCED",    2500.0, 480.0, 10.0, 2200.0, 800.0, 950.0,  0.25, 8,  2.0),
-            FeelPreset("RAPID-FIRE",  3200.0, 520.0, 14.0, 2600.0, 860.0, 800.0,  0.15, 12, 1.5),
-            FeelPreset("HEAVY-CANNON", 1900.0, 400.0, 6.0,  1700.0, 760.0, 1200.0, 0.5,  5,  2.5),
+            FeelPreset("BALANCED",     2500.0, 480.0, 10.0, 950.0,  0.25, 8,  2.0),
+            FeelPreset("RAPID-FIRE",   3200.0, 520.0, 14.0, 800.0,  0.15, 12, 1.5),
+            FeelPreset("HEAVY-CANNON", 1900.0, 400.0, 6.0,  1200.0, 0.5,  5,  2.5),
         ]
         self.preset_idx = 0
 
-        self.dash_cooldown_left = 0.0
         self.last_move_dir = pygame.Vector2(1, 0)
-        
-        # Player sprite animator
+
+        # player sprite animator
         self.player_sprite_animator = PlayerSpriteAnimator(
             "input_control_feel/sprites/Player",
             player_size=self.PLAYER_SIZE
@@ -176,6 +159,8 @@ class Game:
 
         self.wave_manager = WaveManager(self.playfield)
         self.powerup_manager = PowerUpManager(self.playfield)
+        # fresh seed per run so every game has different obstacle layouts
+        self.run_seed = random.randint(0, 2**31 - 1)
         self._load_obstacles_for_current_wave()
         self._ensure_player_not_in_obstacle()
         self.wave_manager.start_wave()
@@ -196,12 +181,20 @@ class Game:
         return self.presets[self.preset_idx]
 
     def _load_obstacles_for_current_wave(self) -> None:
-        obstacles = build_layout_for_wave(self.wave_manager.wave_number, self.playfield)
+        # procedural layout driven by run_seed + wave number — same seed + wave
+        # always makes the same layout, so things stay stable across redraws
+        is_boss = self.wave_manager.cfg.is_boss_wave
+        obstacles = build_layout_for_wave(
+            self.wave_manager.wave_number,
+            self.playfield,
+            seed=self.run_seed,
+            is_boss_wave=is_boss,
+        )
         self.wave_manager.obstacles = obstacles
         self.obstacles = obstacles
 
     def _ensure_player_not_in_obstacle(self) -> None:
-        """If the player's spawn position overlaps an obstacle, push them to a safe nearby spot."""
+        # if the player's spawn overlaps an obstacle, nudge them to a safe spot
         if not any(self.player_rect.colliderect(o.rect) for o in self.obstacles):
             return
 
@@ -221,11 +214,6 @@ class Game:
                 self.player_pos.update(self.player_rect.center)
                 return
 
-    def _cycle_boundary_mode(self) -> None:
-        modes = list(BoundaryMode)
-        idx = modes.index(self.boundary_mode)
-        self.boundary_mode = modes[(idx + 1) % len(modes)]
-
     def _cycle_control_scheme(self) -> None:
         schemes = list(ControlScheme)
         idx = schemes.index(self.control_scheme)
@@ -235,9 +223,6 @@ class Game:
         self.player_pos = pygame.Vector2(self.playfield.center)
         self.player_vel = pygame.Vector2(0, 0)
         self.player_rect.center = self.player_pos
-        self.on_ground = True
-        self.jump_requested = False
-        self.dash_cooldown_left = 0.0
         self.last_move_dir = pygame.Vector2(1, 0)
 
         self.player_hp = self.PLAYER_MAX_HP
@@ -257,6 +242,8 @@ class Game:
 
         self.wave_manager = WaveManager(self.playfield)
         self.powerup_manager.reset()
+        # new seed so restarting gives a whole new set of layouts
+        self.run_seed = random.randint(0, 2**31 - 1)
         self._load_obstacles_for_current_wave()
         self._ensure_player_not_in_obstacle()
         self.wave_manager.start_wave()
@@ -305,8 +292,7 @@ class Game:
         if event.type != pygame.KEYDOWN:
             return
 
-        # escape now toggles pause during play instead of hard-quitting,
-        # and backs out to title from paused / game_over / victory
+        # escape toggles pause during play, backs out to title from other menus
         if event.key == pygame.K_ESCAPE:
             if self.state == "play":
                 self.state = "paused"
@@ -318,7 +304,7 @@ class Game:
                 self.should_quit = True
             return
 
-        # p toggles pause during play — keeps the old platformer-toggle behavior elsewhere
+        # p toggles pause during play
         if event.key == pygame.K_p:
             if self.state == "play":
                 self.state = "paused"
@@ -326,18 +312,10 @@ class Game:
             if self.state == "paused":
                 self.state = "play"
                 return
-            # on title / game over / victory keep the old platformer toggle
-            self.platformer_mode = not self.platformer_mode
-            if self.state != "title":
-                self._reset(keep_state=True)
             return
 
         if event.key == pygame.K_F1:
             self.debug = not self.debug
-            return
-
-        if event.key == pygame.K_TAB:
-            self._cycle_boundary_mode()
             return
 
         if event.key == pygame.K_c:
@@ -369,10 +347,6 @@ class Game:
         if self.state != "play":
             return
 
-        if event.key in {pygame.K_LSHIFT, pygame.K_RSHIFT}:
-            self._try_dash()
-            return
-
         if event.key == pygame.K_SPACE:
             self._try_shoot()
             return
@@ -380,9 +354,6 @@ class Game:
         if event.key == pygame.K_r and not event.mod & pygame.KMOD_CTRL:
             self._try_reload()
             return
-
-        if self.platformer_mode and event.key in {pygame.K_UP, pygame.K_w, pygame.K_SPACE, pygame.K_i}:
-            self.jump_requested = True
 
     def _scheme_keys(self) -> dict[str, set[int]]:
         if self.control_scheme == ControlScheme.WASD:
@@ -407,6 +378,7 @@ class Game:
             direction = direction.normalize()
             self.last_move_dir.update(direction)
 
+        # fallback to arrow keys even when the active scheme isn't ARROWS
         if direction.length_squared() == 0:
             x2 = 0
             y2 = 0
@@ -422,88 +394,10 @@ class Game:
 
         return direction
 
-    def _read_horizontal(self) -> float:
-        keys = pygame.key.get_pressed()
-        mapping = self._scheme_keys()
-
-        x = 0
-        if any(keys[k] for k in mapping["left"]) or keys[pygame.K_LEFT]:
-            x -= 1
-        if any(keys[k] for k in mapping["right"]) or keys[pygame.K_RIGHT]:
-            x += 1
-
-        if x != 0:
-            self.last_move_dir.update(pygame.Vector2(x, 0).normalize())
-
-        return float(x)
-
-    def _apply_platformer_vertical_bounds(self) -> None:
-        if self.player_rect.bottom >= self.playfield.bottom:
-            self.player_rect.bottom = self.playfield.bottom
-            self.player_vel.y = 0
-            self.on_ground = True
-
-        if self.player_rect.top < self.playfield.top:
-            self.player_rect.top = self.playfield.top
-            if self.player_vel.y < 0:
-                self.player_vel.y = 0
-
-        self.player_pos.update(self.player_rect.center)
-
     def _apply_bounds_player(self) -> None:
-        if self.boundary_mode == BoundaryMode.CLAMP:
-            self.player_rect.clamp_ip(self.playfield)
-            self.player_pos.update(self.player_rect.center)
-            return
-
-        if self.boundary_mode == BoundaryMode.WRAP:
-            if self.player_rect.right < self.playfield.left:
-                self.player_rect.left = self.playfield.right
-            elif self.player_rect.left > self.playfield.right:
-                self.player_rect.right = self.playfield.left
-
-            if self.player_rect.bottom < self.playfield.top:
-                self.player_rect.top = self.playfield.bottom
-            elif self.player_rect.top > self.playfield.bottom:
-                self.player_rect.bottom = self.playfield.top
-
-            self.player_pos.update(self.player_rect.center)
-            return
-
-        # BOUNCE
-        bounced = False
-        if self.player_rect.left < self.playfield.left:
-            self.player_rect.left = self.playfield.left
-            self.player_vel.x *= -1
-            bounced = True
-        elif self.player_rect.right > self.playfield.right:
-            self.player_rect.right = self.playfield.right
-            self.player_vel.x *= -1
-            bounced = True
-
-        if self.player_rect.top < self.playfield.top:
-            self.player_rect.top = self.playfield.top
-            self.player_vel.y *= -1
-            bounced = True
-        elif self.player_rect.bottom > self.playfield.bottom:
-            self.player_rect.bottom = self.playfield.bottom
-            self.player_vel.y *= -1
-            bounced = True
-
-        if bounced:
-            self.player_pos.update(self.player_rect.center)
-
-    def _try_dash(self) -> None:
-        if self.dash_cooldown_left > 0:
-            return
-
-        dash_dir = pygame.Vector2(self.last_move_dir)
-        if dash_dir.length_squared() == 0:
-            dash_dir = pygame.Vector2(1, 0)
-        dash_dir = dash_dir.normalize()
-
-        self.player_vel += dash_dir * self.DASH_IMPULSE
-        self.dash_cooldown_left = self.DASH_COOLDOWN
+        # clamp player inside the playfield
+        self.player_rect.clamp_ip(self.playfield)
+        self.player_pos.update(self.player_rect.center)
 
     @staticmethod
     def _vector_to_direction(vec: pygame.Vector2) -> PlayerDirection:
@@ -559,7 +453,7 @@ class Game:
         self.player_sprite_animator.set_weapon_reloading(False)
         self.reload_cooldown_left = 0.0
 
-    # --- callback for power-up pickups ---
+    # callback for power-up pickups
     def _on_powerup_pickup(self, action: str, value) -> None:
         if action == "heal":
             self.player_hp = min(self.PLAYER_MAX_HP, self.player_hp + int(value))
@@ -569,7 +463,7 @@ class Game:
             self.player_sprite_animator.set_weapon_reloading(False)
             self.reload_cooldown_left = 0.0
 
-    # --- callback when wave_manager kills an enemy ---
+    # callback when wave_manager kills an enemy
     def _on_enemy_killed(self, enemy) -> None:
         self.powerup_manager.maybe_drop_from_enemy(enemy.position, enemy.is_boss, self.obstacles)
 
@@ -592,9 +486,6 @@ class Game:
         if self.state != "play":
             return
 
-        if self.dash_cooldown_left > 0:
-            self.dash_cooldown_left = max(0.0, self.dash_cooldown_left - dt)
-
         if self.damage_cooldown_left > 0:
             self.damage_cooldown_left = max(0.0, self.damage_cooldown_left - dt)
 
@@ -615,72 +506,34 @@ class Game:
         p = self.preset
         speed_mult = self.powerup_manager.speed_multiplier()
 
-        if self.platformer_mode:
-            x = self._read_horizontal()
+        # top-down movement
+        direction = self._read_direction()
 
-            self.player_vel.x += x * p.accel * dt
-            if x == 0:
-                self.player_vel.x = self._approach_zero(
-                    self.player_vel.x, p.friction * p.max_speed, dt,
-                )
-            cap = p.max_speed * speed_mult
-            self.player_vel.x = max(-cap, min(cap, self.player_vel.x))
+        self.player_vel += direction * p.accel * dt
 
-            if self.jump_requested and self.on_ground:
-                self.player_vel.y = -p.jump_speed
-                self.on_ground = False
-            self.jump_requested = False
+        if direction.length_squared() == 0:
+            decel = p.friction * p.max_speed
+            self.player_vel.x = self._approach_zero(self.player_vel.x, decel, dt)
+            self.player_vel.y = self._approach_zero(self.player_vel.y, decel, dt)
 
-            self.player_vel.y += p.gravity * dt
+        cap = p.max_speed * speed_mult
+        if self.player_vel.length() > cap:
+            self.player_vel.scale_to_length(cap)
 
-            prev_rect = self.player_rect.copy()
-            self.player_pos += self.player_vel * dt
-            self.player_rect.center = (int(self.player_pos.x), int(self.player_pos.y))
+        prev_rect = self.player_rect.copy()
+        self.player_pos += self.player_vel * dt
+        self.player_rect.center = (int(self.player_pos.x), int(self.player_pos.y))
 
-            # obstacle collision in platformer: land on tops, block sides
-            resolved = resolve_rect_collision(self.player_rect, self.obstacles, prev_rect)
-            if resolved.bottom < self.player_rect.bottom:
-                self.on_ground = True
-                self.player_vel.y = 0
-            if resolved.x != self.player_rect.x:
-                self.player_vel.x = 0
-            self.player_rect = resolved
-            self.player_pos.update(self.player_rect.center)
+        # obstacle collision — slide along walls
+        resolved = resolve_rect_collision(self.player_rect, self.obstacles, prev_rect)
+        if resolved.x != self.player_rect.x:
+            self.player_vel.x = 0
+        if resolved.y != self.player_rect.y:
+            self.player_vel.y = 0
+        self.player_rect = resolved
+        self.player_pos.update(self.player_rect.center)
 
-            prev_y = self.player_rect.centery
-            self._apply_bounds_player()
-            self.player_rect.centery = prev_y
-            self.player_pos.y = prev_y
-
-            self._apply_platformer_vertical_bounds()
-        else:
-            direction = self._read_direction()
-
-            self.player_vel += direction * p.accel * dt
-
-            if direction.length_squared() == 0:
-                decel = p.friction * p.max_speed
-                self.player_vel.x = self._approach_zero(self.player_vel.x, decel, dt)
-                self.player_vel.y = self._approach_zero(self.player_vel.y, decel, dt)
-
-            cap = p.max_speed * speed_mult
-            if self.player_vel.length() > cap:
-                self.player_vel.scale_to_length(cap)
-
-            prev_rect = self.player_rect.copy()
-            self.player_pos += self.player_vel * dt
-            self.player_rect.center = (int(self.player_pos.x), int(self.player_pos.y))
-
-            # obstacle collision (top-down): slide along walls
-            resolved = resolve_rect_collision(self.player_rect, self.obstacles, prev_rect)
-            if resolved.x != self.player_rect.x:
-                self.player_vel.x = 0
-            if resolved.y != self.player_rect.y:
-                self.player_vel.y = 0
-            self.player_rect = resolved
-            self.player_pos.update(self.player_rect.center)
-
-            self._apply_bounds_player()
+        self._apply_bounds_player()
 
         # update projectiles: motion, out-of-bounds, obstacle hits
         surviving_projectiles = []
@@ -727,22 +580,22 @@ class Game:
         if self.wave_manager.all_waves_done:
             self.state = "victory"
 
-        # Update player sprite animation based on movement state
+        # update player sprite animation based on movement state
         if self.player_hp > 0:
-            # Determine direction from last_move_dir
+            # determine direction from last_move_dir
             direction = self._vector_to_direction(self.last_move_dir)
-            
-            # Check if player is moving
+
+            # check if player is moving
             is_moving = self.player_vel.length_squared() > 100
-            
+
             if is_moving:
                 self.player_sprite_animator.set_animation("run", direction)
             else:
                 self.player_sprite_animator.set_animation("idle")
-            
+
             self.player_sprite_animator.update(dt)
         else:
-            # Player is dead
+            # player is dead
             self.player_sprite_animator.set_animation("death")
             self.player_sprite_animator.update(dt)
 
@@ -801,21 +654,16 @@ class Game:
         # active power-up effects shown just right of the HP bar
         self.powerup_manager.draw_hud_effects(self.screen, self.small_font, 340, 4)
 
-        control = "PLATFORMER" if self.platformer_mode else "TOPDOWN"
         left = (
-            f"Bounds: {self.boundary_mode.value.upper()}   Control: {control}   "
-            f"Scheme: {self.control_scheme.value}   Weapon: {self.preset.name}   "
+            f"Scheme: {self.control_scheme.value}   "
+            f"Weapon: {self.preset.name}   "
             f"Wave: {self.wave_manager.wave_number}/{self.wave_manager.total_waves}"
         )
 
-        dash = "READY" if self.dash_cooldown_left <= 0 else f"CD {self.dash_cooldown_left:0.2f}s"
-
         if self.is_reloading:
-            ammo_display = f"RELOADING {self.reload_cooldown_left: .1f}s"
+            right = f"RELOADING {self.reload_cooldown_left: .1f}s"
         else:
-            ammo_display = f"Ammo: {self.ammo_current}/{self.preset.ammo_max}"
-
-        right = f"Dash: {dash}   {ammo_display}"
+            right = f"Ammo: {self.ammo_current}/{self.preset.ammo_max}"
 
         left_surf = self.font.render(left, True, (216, 222, 233))
         right_surf = self.font.render(right, True, (216, 222, 233))
@@ -828,9 +676,9 @@ class Game:
         lines = [
             f"vel=({self.player_vel.x:0.1f}, {self.player_vel.y:0.1f})",
             f"accel={p.accel:0.1f}  friction={p.friction:0.1f}  max={p.max_speed:0.1f}",
-            f"gravity={p.gravity:0.1f}  jump={p.jump_speed:0.1f}",
             f"last_dir=({self.last_move_dir.x:0.2f},{self.last_move_dir.y:0.2f})",
             f"powerups_on_field={len(self.powerup_manager.powerups)}  obstacles={len(self.obstacles)}",
+            f"run_seed={self.run_seed}",
         ]
 
         x = 14
@@ -862,14 +710,49 @@ class Game:
             (self.SCREEN_W // 2 - surf.get_width() // 2,
              self.HUD_H + 30 - lift))
 
+    def _draw_ground_detail(self) -> None:
+        # pebbles and grass tufts scattered across the graveyard floor.
+        # seeded by run_seed so they stay put between frames.
+        import random as _r
+        rng = _r.Random(self.run_seed ^ 0xA11CE)
+        pf = self.playfield
+
+        # small pebbles
+        for _ in range(40):
+            px = rng.randint(pf.left + 8, pf.right - 8)
+            py = rng.randint(pf.top + 8, pf.bottom - 8)
+            shade = rng.choice([(58, 52, 46), (68, 62, 54), (48, 42, 38)])
+            pygame.draw.rect(self.screen, shade, (px, py, 3, 2))
+
+        # grass tufts
+        for _ in range(22):
+            gx = rng.randint(pf.left + 10, pf.right - 10)
+            gy = rng.randint(pf.top + 10, pf.bottom - 10)
+            tuft = rng.choice([(70, 88, 54), (58, 78, 48), (80, 100, 62)])
+            pygame.draw.line(self.screen, tuft, (gx, gy), (gx - 1, gy - 3), 1)
+            pygame.draw.line(self.screen, tuft, (gx + 1, gy), (gx + 1, gy - 4), 1)
+            pygame.draw.line(self.screen, tuft, (gx + 2, gy), (gx + 3, gy - 3), 1)
+
+        # occasional dead leaves / dirt patches
+        for _ in range(8):
+            dx = rng.randint(pf.left + 20, pf.right - 20)
+            dy = rng.randint(pf.top + 20, pf.bottom - 20)
+            patch = pygame.Rect(dx, dy, rng.randint(10, 22), rng.randint(6, 12))
+            pygame.draw.ellipse(self.screen, (32, 28, 24), patch)
+
     def _draw_gameplay(self) -> None:
         # draws the playfield + HUD — used by both play and paused states
-        self.screen.fill((20, 24, 30))
+        self.screen.fill((14, 12, 16))
 
-        pygame.draw.rect(self.screen, (10, 12, 16), self.playfield)
-        pygame.draw.rect(self.screen, (76, 86, 106), self.playfield, width=2)
+        # graveyard dirt ground
+        pygame.draw.rect(self.screen, (42, 38, 34), self.playfield)
+        # darker fence-like border around the yard
+        pygame.draw.rect(self.screen, (26, 22, 20), self.playfield, width=3)
 
-        # obstacles drawn before enemies so enemies/player visually appear "on top"
+        # scatter pebbles and grass tufts — seeded by run_seed so they don't jitter
+        self._draw_ground_detail()
+
+        # obstacles (gravestones) drawn before enemies so enemies/player visually appear "on top"
         draw_obstacles(self.screen, self.obstacles)
 
         # power-ups under enemies (feels right — enemies can step over them visually)
@@ -885,7 +768,7 @@ class Game:
         else:
             player_color = (136, 192, 208)
 
-        # Draw player sprite if available, otherwise fallback to colored rectangle
+        # draw player sprite if available, otherwise fallback to colored rectangle
         player_frame = self.player_sprite_animator.get_current_frame()
         if player_frame:
             weapon_frame, fire_frame = self.player_sprite_animator.get_weapon_frames()
@@ -903,7 +786,7 @@ class Game:
                 PlayerDirection.RIGHT: (18, 1),
             }
 
-            # Facing up: draw weapon under the player body so it doesn't cover the head.
+            # facing up: draw weapon under the player body so it doesn't cover the head
             if weapon_frame and facing == PlayerDirection.UP:
                 wx, wy = weapon_offsets[facing]
                 weapon_dest = weapon_frame.get_rect(
@@ -928,7 +811,7 @@ class Game:
                 )
                 self.screen.blit(fire_frame, fire_dest.topleft)
 
-            # Re-draw player body on top when facing up so muzzle flash stays behind head
+            # re-draw player body on top when facing up so muzzle flash stays behind head
             if facing == PlayerDirection.UP:
                 self.screen.blit(player_frame, player_dest.topleft)
 

@@ -66,7 +66,6 @@ class WaveManager:
         if WaveManager._sprite_animator_right is not None or WaveManager._sprite_animator_left is not None:
             return  # Already loaded
         
-        # CONFIGURATION: Update these to match your sprite sheet
         right_sprite_path = "input_control_feel/sprites/Zombie-Right.png"
         left_sprite_path = "input_control_feel/sprites/Zombie-Left.png"
 
