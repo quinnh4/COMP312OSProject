@@ -253,7 +253,7 @@ def _draw_title_text(surf: pygame.Surface, font: pygame.font.Font, flicker: floa
 
     # blood drips hanging off the red title line
     x2 = w // 2 - s2.get_width() // 2
-    for i, (dx, dlen) in enumerate([(30, 14), (90, 8), (150, 18), (210, 10), (260, 22)]):
+    for i, (dx, dlen) in enumerate([(30, 14), (90, 8), (150, 18), (210, 10), (260, 22), (330, 13)]):
         drip_y = 110 + s2.get_height() - 4
         pygame.draw.rect(surf, BLOOD_RED, (x2 + dx, drip_y, PIXEL, dlen))
         pygame.draw.rect(surf, BLOOD_BRIGHT, (x2 + dx, drip_y + dlen, PIXEL, PIXEL))
@@ -440,7 +440,7 @@ class TitleScreen:
 
         # footer hints
         hint = self.small_font.render(
-            "WASD move  /  SPACE shoot  /  SHIFT dash  /  R reload  /  P pause",
+            "WASD or Arrow Keys: move  /  SPACE: shoot  /  R: reload  /  P or ESC: pause /  1-3: weapon select",
             True, TEXT_DIM)
         surf.blit(hint, (self.w // 2 - hint.get_width() // 2, self.h - 28))
 

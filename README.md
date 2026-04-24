@@ -38,15 +38,15 @@ The project is built using a modular Python architecture, with separate systems 
 - Pygame
 
 ## Controls
-- Arrow keys / `WASD` / `IJKL`: move (top-down)
+- Arrow keys / `WASD`: move (top-down)
 - `Space`: shoot projectile
 - `R`: reload
 - `1` / `2` / `3`: weapon choice (Balanced / Rapid Fire / Heavy Cannon)
 - `P` / `Esc`: pause / resume
 - Left Mouse Click: interact with UI (pause menu, title screen)
 - `Enter`: start game (from title screen)
-- `C`: cycle control scheme (WASD / arrows / IJKL)
 - `Ctrl` + `R`: reset game
+- `I`: invincibilty for debug
 - `F1`: toggle debug overlay
 
 ## Authors

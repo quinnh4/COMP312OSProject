@@ -18,7 +18,6 @@ import pygame
 class ControlScheme(str, Enum):
     WASD = "WASD"
     ARROWS = "ARROWS"
-    IJKL = "IJKL"
 
 
 # projectile class for shooting mechanics
@@ -141,10 +140,12 @@ class Game:
         self.debug = False
         self.invincible = False   # dev toggle — press I in-game
 
+        # name, accel, max_speed, friction, projectile_speed, fire_rate, ammo_max, reload_time
+        # rapid-fire trades power for volume, heavy-cannon trades speed for punch
         self.presets = [
-            FeelPreset("BALANCED",     2500.0, 480.0, 10.0, 950.0,  0.25, 8,  2.0),
-            FeelPreset("RAPID-FIRE",   3200.0, 520.0, 14.0, 800.0,  0.15, 12, 1.5),
-            FeelPreset("HEAVY-CANNON", 1900.0, 400.0, 6.0,  1200.0, 0.5,  5,  2.5),
+            FeelPreset("BALANCED",     2400.0, 440.0, 10.0, 950.0,  0.28, 10, 2.0),
+            FeelPreset("RAPID-FIRE",   3200.0, 560.0, 14.0, 800.0,  0.10, 18, 1.3),
+            FeelPreset("HEAVY-CANNON", 1500.0, 280.0, 6.0,  1300.0, 0.70, 4,  3.0),
         ]
         self.preset_idx = 0
 
@@ -235,9 +236,9 @@ class Game:
         self.death_anim_timer = 0.0
 
         if hasattr(self, 'presets') and len(self.presets) == 3:
-            self.presets[0].ammo_max = 8
-            self.presets[1].ammo_max = 12
-            self.presets[2].ammo_max = 5
+            self.presets[0].ammo_max = 10
+            self.presets[1].ammo_max = 18
+            self.presets[2].ammo_max = 4
 
         self.projectiles.clear()
         self.ammo_current = self.preset.ammo_max
@@ -368,9 +369,8 @@ class Game:
     def _scheme_keys(self) -> dict[str, set[int]]:
         if self.control_scheme == ControlScheme.WASD:
             return {"left": {pygame.K_a}, "right": {pygame.K_d}, "up": {pygame.K_w}, "down": {pygame.K_s}}
-        if self.control_scheme == ControlScheme.IJKL:
-            return {"left": {pygame.K_j}, "right": {pygame.K_l}, "up": {pygame.K_i}, "down": {pygame.K_k}}
-        return {"left": {pygame.K_LEFT}, "right": {pygame.K_RIGHT}, "up": {pygame.K_UP}, "down": {pygame.K_DOWN}}
+        if self.control_scheme == ControlScheme.ARROWS:
+            return {"left": {pygame.K_LEFT}, "right": {pygame.K_RIGHT}, "up": {pygame.K_UP}, "down": {pygame.K_DOWN}}
 
     def _read_direction(self) -> pygame.Vector2:
         keys = pygame.key.get_pressed()
@@ -563,8 +563,13 @@ class Game:
             surviving_projectiles.append(projectile)
         self.projectiles = surviving_projectiles
 
-        # damage calc: heavy cannon × wave-5 boost × damage-boost power-up
-        proj_damage = 2.0 if self.preset.name == "HEAVY-CANNON" else 1.0
+        # damage calc: weapon base × wave-5 boost × damage-boost power-up
+        if self.preset.name == "HEAVY-CANNON":
+            proj_damage = 2.0
+        elif self.preset.name == "RAPID-FIRE":
+            proj_damage = 0.6
+        else:
+            proj_damage = 1.0
         if self.wave_manager.wave_number >= 5:
             proj_damage *= 1.25
         proj_damage *= self.powerup_manager.damage_multiplier()
@@ -766,7 +771,24 @@ class Game:
         remain_color = (160, 60, 60) if remaining > 0 else (60, 120, 60)
         remain_surf = self.small_font.render(
             f"{remaining} remaining", True, remain_color)
-        self.screen.blit(remain_surf, (self.SCREEN_W // 2 - remain_surf.get_width() // 2, 28))
+        self.screen.blit(remain_surf, (self.SCREEN_W // 2 - remain_surf.get_width() // 2, 22))
+
+        # --- equipped weapon label (below "remaining") ---
+        weapon_names = {
+            "RAPID-FIRE":   "RAPID FIRE",
+            "BALANCED":     "BALANCED",
+            "HEAVY-CANNON": "HEAVY CANNON",
+        }
+        weapon_colors = {
+            "RAPID-FIRE":   (255, 210, 80),
+            "BALANCED":     (180, 190, 170),
+            "HEAVY-CANNON": (200, 80, 60),
+        }
+        weapon_text = weapon_names.get(self.preset.name, self.preset.name)
+        weapon_color = weapon_colors.get(self.preset.name, (180, 180, 180))
+        weapon_surf = self.small_font.render(weapon_text, True, weapon_color)
+        self.screen.blit(weapon_surf,
+                         (self.SCREEN_W // 2 - weapon_surf.get_width() // 2, 36))
 
         # --- bullet pips (top-right) ---
         pip_y = 8
@@ -817,14 +839,51 @@ class Game:
             self.screen.blit(surf, (x, y))
             y += 18
 
-    def _draw_center_message(self, title: str, subtitle: str) -> None:
-        title_surf = self.big_font.render(title, True, (236, 239, 244))
-        sub_surf = self.font.render(subtitle, True, (216, 222, 233))
+    def _draw_center_message(self, title: str, subtitle: str,
+                             title_color: tuple = (255, 210, 60),
+                             use_big_panel: bool = True) -> None:
+        # themed panel — matches the title and pause screens
+        title_surf = self.pause_title_font.render(title, True, title_color)
+        shadow_surf = self.pause_title_font.render(title, True, (40, 0, 0))
+        sub_surf = self.font.render(subtitle, True, (200, 180, 160))
 
-        self.screen.blit(title_surf,
-            (self.SCREEN_W // 2 - title_surf.get_width() // 2, self.SCREEN_H // 2 - 60))
-        self.screen.blit(sub_surf,
-            (self.SCREEN_W // 2 - sub_surf.get_width() // 2, self.SCREEN_H // 2))
+        tw = title_surf.get_width()
+        th = title_surf.get_height()
+        sw = sub_surf.get_width()
+        sh = sub_surf.get_height()
+
+        panel_w = max(tw, sw) + 80
+        panel_h = th + (sh + 18 if subtitle else 0) + 48
+        panel = pygame.Rect(0, 0, panel_w, panel_h)
+        panel.center = (self.SCREEN_W // 2, self.SCREEN_H // 2 - 20)
+
+        # drop shadow
+        shadow_rect = panel.move(6, 6)
+        pygame.draw.rect(self.screen, (0, 0, 0), shadow_rect)
+
+        # panel body + double border for the arcade look
+        pygame.draw.rect(self.screen, (28, 20, 24), panel)
+        pygame.draw.rect(self.screen, (180, 40, 40), panel, width=4)
+        inner = panel.inflate(-10, -10)
+        pygame.draw.rect(self.screen, (60, 20, 24), inner, width=1)
+
+        # title with shadow
+        tx = panel.centerx - tw // 2
+        ty = panel.top + 20
+        self.screen.blit(shadow_surf, (tx + 3, ty + 3))
+        self.screen.blit(title_surf, (tx, ty))
+
+        # blood drips under the title
+        drip_y = ty + th - 4
+        for (dx, dlen) in [(-tw // 3, 10), (0, 16), (tw // 3, 8)]:
+            pygame.draw.rect(self.screen, (170, 20, 20),
+                             (panel.centerx + dx, drip_y, 4, dlen))
+            pygame.draw.rect(self.screen, (220, 30, 30),
+                             (panel.centerx + dx, drip_y + dlen, 4, 4))
+
+        if subtitle:
+            self.screen.blit(sub_surf,
+                             (panel.centerx - sw // 2, ty + th + 24))
 
     def _draw_pickup_toast(self) -> None:
         pm = self.powerup_manager
@@ -976,24 +1035,38 @@ class Game:
             self.screen.blit(fade, (0, 0))
 
         if self.wave_manager.wave_complete and not self.wave_manager.all_waves_done:
+            roman = ["I", "II", "III", "IV", "V"]
+            wave_num = self.wave_manager.wave_number
+            wave_roman = roman[wave_num - 1] if wave_num <= len(roman) else str(wave_num)
+
             if self.wave_manager.wave_number >= self.wave_manager.total_waves:
-                self._draw_center_message("Boss Killed!", "")
+                self._draw_center_message("THE BEAST FALLS", "",
+                                          title_color=(255, 210, 60))
             else:
                 if self.wave_manager.wave_number == 4:
-                    msg1 = f"Wave {self.wave_manager.wave_number} Clear! +3 Max Ammo! +25% Power!"
+                    subtitle = f"+3 Max Ammo  +25% Power    Next night in {self.wave_manager.transition_timer:.1f}s"
                 else:
-                    msg1 = f"Wave {self.wave_manager.wave_number} Clear! +3 Max Ammo!"
+                    subtitle = f"+3 Max Ammo    Next night in {self.wave_manager.transition_timer:.1f}s"
 
                 self._draw_center_message(
-                    msg1,
-                    f"Next wave in {self.wave_manager.transition_timer:.1f}s...",
+                    f"NIGHT {wave_roman} SURVIVED",
+                    subtitle,
+                    title_color=(255, 210, 60),
                 )
 
         if self.state == "victory":
-            self._draw_center_message("YOU WIN!", f"Kills: {self.wave_manager.total_kills}   ENTER to restart")
+            self._draw_center_message(
+                "YOU SURVIVED",
+                f"{self.wave_manager.total_kills} undead slain   —   ENTER to hunt again",
+                title_color=(255, 210, 60),
+            )
 
         if self.state == "game_over":
-            self._draw_center_message("GAME OVER", f"Kills: {self.wave_manager.total_kills}   ENTER to restart")
+            self._draw_center_message(
+                "YOU ARE DEAD",
+                f"{self.wave_manager.total_kills} undead slain   —   ENTER to rise again",
+                title_color=(200, 30, 30),
+            )
 
     def draw(self) -> None:
         if self.state == "title":
