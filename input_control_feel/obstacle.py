@@ -17,6 +17,8 @@ _SPRITE_PATHS = [
     "input_control_feel/sprites/tombstones/tombstone1.png",
     "input_control_feel/sprites/tombstones/tombstone2.png",
     "input_control_feel/sprites/tombstones/tombstone3.png",
+    "input_control_feel/sprites/tombstones/tombstone4.png",
+    "input_control_feel/sprites/tombstones/tombstone5.png",
 ]
 
 # tight pixel bounds for each sprite as (left_frac, top_frac, right_frac, bot_frac)
@@ -47,7 +49,7 @@ def _compute_tight_fracs(img: pygame.Surface) -> tuple[float, float, float, floa
 
 
 def _load_tombstone_sprites() -> list[pygame.Surface]:
-    # try to load all three tombstone sprites once and cache them.
+    # try to load all tombstone sprites once and cache them.
     global _TOMBSTONE_SPRITES, _SPRITE_TIGHT_FRACS
     if _TOMBSTONE_SPRITES is not None:
         return _TOMBSTONE_SPRITES
@@ -133,7 +135,7 @@ class Obstacle:
 _SPAWN_CLEARANCE = 90
 
 # minimum gap between obstacles so the player can always squeeze between
-_MIN_GAP = 46
+_MIN_GAP = 34
 
 # keep obstacles off the arena border
 _EDGE_MARGIN = 20
@@ -268,7 +270,7 @@ def _layout_scattered(rng: random.Random, pf: pygame.Rect, count: int) -> list[p
     placed: list[pygame.Rect] = []
     safe = _spawn_safe_zone(pf)
     for _ in range(count):
-        r = _try_place_spread(rng, pf, placed, safe, (66, 105), count)
+        r = _try_place_spread(rng, pf, placed, safe, (44, 68), count)
         if r:
             placed.append(r)
     return placed
@@ -288,7 +290,7 @@ def _layout_rows(rng: random.Random, pf: pygame.Rect, count: int) -> list[pygame
             x_rel = (ci + 0.5) / per_row
             x = pf.left + int(pf.width * x_rel) + rng.randint(-20, 20)
             y = row_y + rng.randint(-15, 15)
-            size = rng.randint(72, 96)
+            size = rng.randint(48, 62)
             r = _rect_around(x, y, size, size)
             if _fits(r, placed, safe, pf):
                 placed.append(r)
@@ -319,7 +321,7 @@ def _layout_clusters(rng: random.Random, pf: pygame.Rect, count: int) -> list[py
         for _ in range(per_cluster):
             # try a few positions near the cluster center
             for _ in range(8):
-                size = rng.randint(60, 87)
+                size = rng.randint(40, 56)
                 x = center_x + rng.randint(-40, 40)
                 y = center_y + rng.randint(-30, 30)
                 r = _rect_around(x, y, size, size)
@@ -340,7 +342,7 @@ def _layout_perimeter(rng: random.Random, pf: pygame.Rect, count: int) -> list[p
         if len(placed) >= count:
             break
         for _ in range(8):
-            r = _rand_rect_in_cell(rng, pf, col, row, (66, 96))
+            r = _rand_rect_in_cell(rng, pf, col, row, (44, 62))
             if _fits(r, placed, safe, pf):
                 placed.append(r)
                 break
@@ -356,7 +358,7 @@ def _layout_boss_arena(rng: random.Random, pf: pygame.Rect, count: int) -> list[
     for rel_x, rel_y in positions:
         jitter_x = rng.randint(-18, 18)
         jitter_y = rng.randint(-14, 14)
-        size = rng.randint(84, 108)
+        size = rng.randint(54, 70)
         cx = pf.left + int(pf.width * rel_x) + jitter_x
         cy = pf.top + int(pf.height * rel_y) + jitter_y
         r = _rect_around(cx, cy, size, size)
@@ -366,7 +368,7 @@ def _layout_boss_arena(rng: random.Random, pf: pygame.Rect, count: int) -> list[
     # sometimes add an off-center stone to really split the arena
     if rng.random() < 0.5 and len(placed) < count:
         side = rng.choice([-1, 1])
-        size = rng.randint(72, 90)
+        size = rng.randint(48, 60)
         r = _rect_around(pf.centerx + side * (_SPAWN_CLEARANCE + rng.randint(10, 40)),
                          pf.centery + rng.randint(-30, 30),
                          size, size)
@@ -422,7 +424,7 @@ def _top_up_to_minimum(rng: random.Random, pf: pygame.Rect,
     safe = _spawn_safe_zone(pf)
     attempts = 0
     while len(placed) < max(_MIN_OBSTACLES, count_target) and attempts < 300:
-        r = _try_place_spread(rng, pf, placed, safe, (66, 90), count_target)
+        r = _try_place_spread(rng, pf, placed, safe, (44, 58), count_target)
         if r:
             placed.append(r)
         attempts += 1

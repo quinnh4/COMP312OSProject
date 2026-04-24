@@ -118,6 +118,10 @@ class Game:
         self.button_font = pygame.font.SysFont("couriernew,consolas,monospace", 22, bold=True)
         self._apply_window_size(self.SCREEN_W, self.SCREEN_H, recreate_surface=False)
 
+        # sound effects + music — missing files are skipped silently
+        self._init_audio()
+        self._play_music("menu")
+
         # states: "title", "play", "dying", "paused", "game_over", "victory"
         self.state = "title"
         # main loop watches this to know when a quit button was clicked
@@ -433,6 +437,7 @@ class Game:
         direction = direction.normalize()
 
         self.player_sprite_animator.trigger_shoot(self._vector_to_direction(direction))
+        self._play_sfx("gun")
 
         projectile = Projectile(
             position=pygame.Vector2(self.player_pos),
@@ -463,6 +468,90 @@ class Game:
         self.player_sprite_animator.set_weapon_reloading(False)
         self.reload_cooldown_left = 0.0
 
+    # audio — loaded once, missing files are skipped
+    def _init_audio(self) -> None:
+        import os
+        try:
+            pygame.mixer.init()
+        except pygame.error as e:
+            print(f"[audio] mixer init failed: {e}")
+            self.sfx = {}
+            self.music_paths = {"menu": None, "level": None}
+            self.current_music = None
+            return
+
+        sfx_files = {
+            "gun":          "input_control_feel/sounds/gun.mp3",
+            "zombie_death": "input_control_feel/sounds/zombie_death.mp3",
+            "boss_death":   "input_control_feel/sounds/boss_zombie.mp3",
+            "death":        "input_control_feel/sounds/death.mp3",
+            "hurt":         "input_control_feel/sounds/hurt.mp3",
+            "powerup":      "input_control_feel/sounds/powerup.mp3",
+        }
+        self.sfx: dict[str, pygame.mixer.Sound] = {}
+        for key, path in sfx_files.items():
+            if not os.path.exists(path):
+                print(f"[audio] missing: {path}")
+                continue
+            try:
+                snd = pygame.mixer.Sound(path)
+                self.sfx[key] = snd
+            except pygame.error as e:
+                print(f"[audio] failed to load {path}: {e}")
+
+        # per-sound volume tweaks — gun fires a lot so keep it quieter
+        if "gun" in self.sfx:
+            self.sfx["gun"].set_volume(0.35)
+        if "zombie_death" in self.sfx:
+            self.sfx["zombie_death"].set_volume(0.6)
+        if "boss_death" in self.sfx:
+            self.sfx["boss_death"].set_volume(0.9)
+        if "death" in self.sfx:
+            self.sfx["death"].set_volume(0.8)
+        if "hurt" in self.sfx:
+            self.sfx["hurt"].set_volume(0.7)
+        if "powerup" in self.sfx:
+            self.sfx["powerup"].set_volume(0.7)
+
+        # music tracks — menu plays on title/pause, level plays during gameplay
+        menu_path = "input_control_feel/music/main_menu.mp3"
+        level_path = "input_control_feel/music/level_music.mp3"
+        self.music_paths = {
+            "menu":  menu_path if os.path.exists(menu_path) else None,
+            "level": level_path if os.path.exists(level_path) else None,
+        }
+        for label, path in (("menu", menu_path), ("level", level_path)):
+            if self.music_paths[label] is None:
+                print(f"[audio] missing: {path}")
+        self.current_music: str | None = None
+
+    def _play_sfx(self, key: str) -> None:
+        snd = self.sfx.get(key) if hasattr(self, "sfx") else None
+        if snd:
+            snd.play()
+
+    def _play_music(self, track: str) -> None:
+        # track is "menu" or "level" — swap only when needed, loop forever
+        if self.current_music == track:
+            return
+        path = self.music_paths.get(track)
+        if not path:
+            return
+        try:
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.set_volume(0.4)
+            pygame.mixer.music.play(-1)
+            self.current_music = track
+        except pygame.error as e:
+            print(f"[audio] music play failed: {e}")
+
+    def _stop_music(self) -> None:
+        try:
+            pygame.mixer.music.stop()
+        except pygame.error:
+            pass
+        self.current_music = None
+
     # callback for power-up pickups
     def _on_powerup_pickup(self, action: str, value) -> None:
         if action == "heal":
@@ -475,9 +564,18 @@ class Game:
 
     # callback when wave_manager kills an enemy
     def _on_enemy_killed(self, enemy) -> None:
+        self._play_sfx("boss_death" if enemy.is_boss else "zombie_death")
         self.powerup_manager.maybe_drop_from_enemy(enemy.position, enemy.is_boss, self.obstacles)
 
     def update(self, dt: float) -> None:
+        # menu track on title/pause, level track during play, stop on death/end screens
+        if self.state in ("title", "paused"):
+            self._play_music("menu")
+        elif self.state == "play":
+            self._play_music("level")
+        else:
+            self._stop_music()
+
         # animate the title screen even when not playing
         if self.state == "title":
             self.title_screen.update(dt)
@@ -579,7 +677,12 @@ class Game:
         )
 
         self.wave_manager.update(dt, self.player_pos, on_enemy_killed=self._on_enemy_killed)
+
+        # watch for any powerup pickup — timer resets to 1.5 on every pickup type
+        prev_pickup_timer = self.powerup_manager.last_pickup_timer
         self.powerup_manager.update(dt, self.player_rect, self._on_powerup_pickup, self.obstacles)
+        if self.powerup_manager.last_pickup_timer > prev_pickup_timer:
+            self._play_sfx("powerup")
 
         if self.wave_manager.wave_complete:
             if not getattr(self, "reward_given_for_wave", False) and not self.wave_manager.all_waves_done:
@@ -644,6 +747,9 @@ class Game:
                         self.red_flash_timer = 0.5
                         self.death_anim_timer = self.DEATH_ANIM_DURATION
                         self.state = "dying"
+                        self._play_sfx("death")
+                    else:
+                        self._play_sfx("hurt")
                     break
 
     # ------------------------------------------------------------------ HUD

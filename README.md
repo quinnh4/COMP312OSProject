@@ -54,4 +54,19 @@ The project is built using a modular Python architecture, with separate systems 
 - Ryan Compas
 - Khumoyun Abdulpattoev
 
+## Tombstone PNG Credit:
+- tombstone1.png: https://www.shutterstock.com/image-vector/gravestone-pixel-art-set-objects-tombstone-2683992699
+- tombstone2.png: https://www.shutterstock.com/image-vector/gravestone-pixel-art-set-objects-tombstone-2683992699
+- tombstone3.png: https://www.shutterstock.com/image-vector/gravestone-pixel-art-set-objects-tombstone-2683992699
+- tombstone4.png: https://www.shutterstock.com/image-vector/gravestone-pixel-art-set-objects-tombstone-2683992699
+- tombstone5.png: https://www.shutterstock.com/image-vector/gravestone-pixel-art-set-objects-tombstone-2683992699
 
+## Sound Effect Credits (Royalty-Free)
+- main_music.mp3: https://pixabay.com/music/mystery-electro-zombies-371569/
+- level_music.mp3: https://pixabay.com/music/fantasy-dreamy-childrens-plagued-bastion-survival-undead-haven-477915/
+- boss_zombie.mp3: https://pixabay.com/sound-effects/horror-zombie-3-106344/
+- zombie_death.mp3: https://pixabay.com/sound-effects/zombie-15965/
+- death.mp3: https://pixabay.com/sound-effects/horror-male-death-sound-128357/
+- powerup.mp3: https://pixabay.com/sound-effects/film-special-effects-video-game-power-up-sound-effect-384657/
+- gun.mp3: https://pixabay.com/sound-effects/film-special-effects-single-pistol-gunshot-42-40781/
+- hurt.mp3: https://pixabay.com/sound-effects/film-special-effects-retro-hurt-2-236675/
